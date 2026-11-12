@@ -1,0 +1,60 @@
+# Whole stack in Docker: dashboard + WhatsApp gateway (WAHA) + optional Ollama.
+#   cp .env.example .env   (edit passwords, set WAHA_IMAGE; Apple Silicon: devlikeapro/waha:gows-arm)
+#   docker compose -f docker-compose.full.yml up -d --build                       # Ollama on the host
+#   docker compose -f docker-compose.full.yml --profile ollama up -d --build      # Ollama in Docker too
+#   docker compose -f docker-compose.full.yml --profile ollama run --rm ollama-pull   # once: download the model
+# Open http://localhost:8000. The plain docker-compose.yml (WAHA only) is for ./run.sh users.
+name: lead-agent
+services:
+  dashboard:
+    build: .
+    restart: unless-stopped
+    env_file: .env
+    environment:   # override host-style URLs from .env with in-network ones
+      WAHA_URL: http://waha:3000
+      OLLAMA_URL: ${DOCKER_OLLAMA_URL:-http://ollama:11434}   # host Ollama: http://host.docker.internal:11434
+      DB_PATH: /data/leads.db
+      BACKUP_DIR: /data/backups
+    ports:
+      - "${DASHBOARD_BIND:-127.0.0.1}:${DASHBOARD_PORT:-8000}:8000"
+    volumes:
+      - data:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - waha
+
+  waha:
+    image: ${WAHA_IMAGE:-devlikeapro/waha:gows}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${WAHA_PORT:-3000}:3000"
+    environment:
+      WAHA_API_KEY: ${WAHA_API_KEY:?Set WAHA_API_KEY in .env}
+      WAHA_DASHBOARD_USERNAME: admin
+      WAHA_DASHBOARD_PASSWORD: ${WAHA_API_KEY:?Set WAHA_API_KEY in .env}
+      WHATSAPP_DEFAULT_ENGINE: GOWS
+      WHATSAPP_HOOK_URL: http://dashboard:8000/webhook/waha?token=${WEBHOOK_TOKEN:-}
+      WHATSAPP_HOOK_EVENTS: message
+    volumes:
+      - waha_sessions:/app/.sessions
+
+  ollama:
+    profiles: [ollama]
+    image: ollama/ollama
+    restart: unless-stopped
+    volumes:
+      - ollama:/root/.ollama
+
+  ollama-pull:   # one-shot: docker compose -f docker-compose.full.yml --profile ollama run --rm ollama-pull
+    profiles: [ollama]
+    image: ollama/ollama
+    depends_on: [ollama]
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    entrypoint: ["ollama", "pull", "${OLLAMA_MODEL:-llama3.2:3b}"]
+
+volumes:
+  data:
+  waha_sessions:
+  ollama:
