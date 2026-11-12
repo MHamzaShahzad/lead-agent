@@ -71,3 +71,4 @@ Do the phases in order; run the tests and check desktop + mobile screenshots aft
 - Sending hours (default 09:00-20:00) and an opt-out line on first messages.
 - "Find email/phone on website", campaign tag per lead with reply rate per campaign.
 - Per-lead notes and dated reminders (shown in Today).
+- Sending queue (`app/sendqueue.py`): Send/Send selected queue messages (`queued` + `scheduled_at`); one background worker sends inside the weekday hours, under the daily limit, with a random gap (`SEND_GAP_MIN/MAX`) and typing indicator; skips opted-out/replied leads; Pause/Resume and Cancel in the UI; a crash mid-send marks the message failed instead of resending. Pause flag and next gap live in a `kv` table.

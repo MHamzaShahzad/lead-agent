@@ -1,6 +1,6 @@
 """WhatsApp via WAHA (open-source WhatsApp HTTP API running in Docker)."""
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 
@@ -135,6 +135,19 @@ def _next_open(now, windows):
     return None
 
 
+def next_open_dt(now):
+    """Local datetime when the next sending window starts after `now` (None if every day is off)."""
+    windows = week_windows()
+    for k in range(8):
+        d = (now.weekday() + k) % 7
+        if windows[d]:
+            h, m = map(int, windows[d][0].split(":"))
+            start = (now + timedelta(days=k)).replace(hour=h, minute=m, second=0, microsecond=0)
+            if start > now:
+                return start
+    return None
+
+
 def hours_problem(now=None):
     """None if sending is allowed right now (local time, that weekday's window), else a plain-English reason."""
     now = now or _local_now()
@@ -164,6 +177,15 @@ def check_limits(lead):
         wait = config.MIN_SECONDS_BETWEEN_SENDS - (datetime.now(timezone.utc) - last).total_seconds()
         if wait > 0:
             raise SendBlocked(f"Slow down: wait {int(wait)}s between messages.")
+
+
+def typing(phone, on=True):
+    """Show/hide the 'typing...' indicator. Best effort: never raises."""
+    try:
+        httpx.post(f"{config.WAHA_URL}/api/{'startTyping' if on else 'stopTyping'}", headers=_headers(), timeout=5,
+                   json={"session": config.WAHA_SESSION, "chatId": chat_id(phone)})
+    except Exception:
+        pass
 
 
 def send_text(phone, text):

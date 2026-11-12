@@ -18,7 +18,7 @@ Everything runs on your own computer: no cloud AI, no paid API, your leads never
 - **Replies**: incoming WhatsApp messages land in Chats with an AI tag (interested, asking price, not now, not
   interested) and a suggested next step. Unknown numbers that write to you become leads.
 - **Follow-ups** after 3 and 7 days (editable); a reply cancels them.
-- **Safety**: approval before every send, daily limit, gap between messages, per-weekday sending hours, STOP/opt-out
+- **Safety**: approval before every send, daily limit, random gap between messages, per-weekday sending hours, STOP/opt-out, a sending queue that waits for your hours
   respected everywhere, opt-out line on first messages, optional dashboard password.
 - Lead page with chat, notes and reminders, campaign tags, "find email/phone on website", CSV export, reply-rate stats.
 - Daily backup of `leads.db` to `backups/` (last 14). Optional phone push on replies via [ntfy](https://ntfy.sh).
@@ -87,10 +87,19 @@ Send on the ones you like.
 **Every day after:** make sure Ollama and Docker are running, then `./run.sh`. After changing `.env` by hand,
 restart the dashboard (Ctrl+C, then `./run.sh`).
 
+## Sending queue
+
+Pressing Send (or Send selected) only *queues* a message. One background worker sends queued messages one at a time,
+only inside your sending hours and under the daily limit; otherwise they wait for the next window (the queue survives restarts).
+Each gap is random between `SEND_GAP_MIN` and `SEND_GAP_MAX` seconds (unset = the fixed `MIN_SECONDS_BETWEEN_SENDS`), with a short
+"typing..." first (`SEND_TYPING=0` to disable). Queued items show "sends at ~HH:MM" and a Cancel button (back to draft); the Overview
+lists the queue and Settings has Pause/Resume. A message is skipped if the lead opts out or replies while it waits; failed sends keep
+their error and "Try again".
+
 ## Configuration
 
 Most settings are in the dashboard's **Settings** tab and are saved to `.env`: app name and tagline, business
-description, daily limit, seconds between messages, follow-up days, per-weekday sending hours, opt-out line, AI model.
+description, daily limit, seconds between messages (min/max), follow-up days, per-weekday sending hours, opt-out line, AI model.
 Only in `.env`: `DASHBOARD_PASSWORD`, `WAHA_API_KEY`, `WEBHOOK_TOKEN`, `DEFAULT_COUNTRY_CODE`, `WAHA_IMAGE`,
 `OLLAMA_URL`, `WAHA_URL`, `NTFY_TOPIC`. Every option is described in [.env.example](.env.example).
 
