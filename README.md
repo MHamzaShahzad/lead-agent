@@ -124,7 +124,7 @@ Open http://localhost:8000 and sign in. Keep the terminal open while you use it 
 
 ### 4. Link your WhatsApp
 
-In the dashboard: **More → WhatsApp**, type your number with country code and press **Get pairing code**.
+(Details: [Setup guides](#setup-guides).) In the dashboard: **More → WhatsApp**, type your number with country code and press **Get pairing code**.
 On your phone: WhatsApp → Settings → **Linked devices** → **Link a device** → *Link with phone number instead*,
 and type the 8-character code.
 
@@ -147,7 +147,112 @@ Send on the ones you like.
 **Every day after:** make sure Ollama and Docker are running, then `./run.sh`. After changing `.env` by hand,
 restart the dashboard (Ctrl+C, then `./run.sh`).
 
-## Run with Docker (everything in containers)
+## Setup guides
+
+Step-by-step help for each connection. Only Ollama and one WhatsApp provider are required. Screenshots show the dashboard in
+[demo mode](#demo-mode) (sample data only). Third-party consoles (Meta, Google, Gmail, n8n) change often, so those steps link to
+the official docs instead of screenshots. Open a block to read it.
+
+<details><summary><b>Ollama</b> (the local AI)</summary>
+
+1. Install from [ollama.com/download](https://ollama.com/download) and open it once (it runs in the background).
+2. Download the model: `ollama pull llama3.2:3b` (about 2 GB). `setup.py` does this for you.
+3. Check it: `curl http://localhost:11434/api/tags` lists the model, and the dashboard header shows the AI as ready.
+4. Other model or machine: set `OLLAMA_MODEL` / `OLLAMA_URL` in `.env` (or the AI model field in **Settings**) and restart.
+5. Dashboard in Docker: set `DOCKER_OLLAMA_URL=http://host.docker.internal:11434`; on Linux start Ollama with `OLLAMA_HOST=0.0.0.0`.
+
+![Settings tab](docs/screenshots/setup/settings.png)
+</details>
+
+<details><summary><b>WAHA</b> (link your WhatsApp)</summary>
+
+WAHA runs in Docker and links your phone as a "linked device". Read the [ban-risk section](#whatsapp-limits-tos-and-ban-risk) first.
+
+1. `setup.py` (step 2 above) starts it. By hand: set `WAHA_API_KEY`, `WEBHOOK_TOKEN` and `WAHA_IMAGE` in `.env`
+   (`devlikeapro/waha:gows`, or `gows-arm` on Apple Silicon), then `docker compose --env-file .env up -d`.
+2. On `/setup` step 3 choose **WAHA** and press **Test connection** (it only reads status, never sends).
+3. Open **More → WhatsApp**, type your number with country code, press **Get pairing code**.
+4. On the phone: WhatsApp → Settings → **Linked devices** → **Link a device** → *Link with phone number instead* → type the 8-character code.
+   (QR alternative: http://localhost:3000/dashboard, user `admin`, password = `WAHA_API_KEY`.)
+5. The card turns to **Connected**. If it logs out later, repeat step 3. Optional hardening: `WAHA_WEBHOOK_HMAC_KEY`.
+
+![WhatsApp provider choice](docs/screenshots/setup/setup-whatsapp-provider.png)
+![WhatsApp tab](docs/screenshots/setup/whatsapp-tab.png)
+</details>
+
+<details><summary><b>WhatsApp Cloud API</b> (official, ToS-compliant)</summary>
+
+Needs a free Meta developer account and a business phone number. Follow Meta's own
+[Cloud API get started](https://developers.facebook.com/docs/whatsapp/cloud-api/get-started) guide alongside:
+
+1. At [developers.facebook.com/apps](https://developers.facebook.com/apps) create a **Business** app and add the **WhatsApp** product.
+2. WhatsApp → API setup: add your business phone number and note the **Phone number ID**.
+3. Make a permanent token: Business settings → Users → **System users** → add one → *Generate token* with `whatsapp_business_messaging`
+   and `whatsapp_business_management` ([how](https://developers.facebook.com/docs/whatsapp/business-management-api/get-started)).
+4. App settings → Basic: copy the **App secret**.
+5. On `/setup` step 3 choose **Official Cloud API**, paste token, phone number ID and app secret, and press **Generate random key** for the verify token. Save
+   (or set `WHATSAPP_PROVIDER=cloud`, `WA_CLOUD_TOKEN`, `WA_CLOUD_PHONE_NUMBER_ID`, `WA_CLOUD_APP_SECRET`, `WA_CLOUD_VERIFY_TOKEN` in `.env`).
+6. Meta → WhatsApp → Configuration → Webhook: callback `https://YOUR-PUBLIC-URL/webhook/cloud` (shown on the setup page), your verify token, subscribe to **messages**.
+   It must be reachable from the internet (see Remote access below). It skips the dashboard login but rejects requests without a valid `X-Hub-Signature-256`.
+7. **24-hour rule:** free text only goes to leads who wrote in the last 24 hours. For first contact create a template in
+   [WhatsApp Manager](https://business.facebook.com/wa/manage/message-templates/) (category *Marketing*, one body variable, e.g. `Hi! {{1}}`),
+   wait for approval, then set `WA_CLOUD_TEMPLATE` (+ `WA_CLOUD_TEMPLATE_LANG`). The draft text goes into `{{1}}`. Without a template, drafts to new leads are blocked and the card says why.
+8. **Costs:** Meta charges per delivered template message (cents each, varies by country; see [Meta pricing](https://developers.facebook.com/docs/whatsapp/pricing)). Replies inside the window are free.
+
+![Cloud API fields on /setup](docs/screenshots/setup/setup-cloud-fields.png)
+</details>
+
+<details><summary><b>Google Places</b> (extra lead source)</summary>
+
+1. In the [Google Cloud console](https://console.cloud.google.com/) create or pick a project and
+   [enable billing](https://cloud.google.com/billing/docs/how-to/modify-project) (required; the free monthly credit covers small use).
+2. Enable **Places API (New)** in the [API library](https://console.cloud.google.com/apis/library/places.googleapis.com).
+3. APIs & Services → Credentials → **Create credentials → API key** ([guide](https://developers.google.com/maps/documentation/places/web-service/get-api-key)).
+4. Restrict the key to *Places API (New)* only and set a daily quota cap ([pricing](https://developers.google.com/maps/billing-and-pricing/pricing)).
+5. Paste it on `/setup` step 4 (or `GOOGLE_PLACES_API_KEY` in `.env`, then restart). **Add leads** now has a *Source* choice: OpenStreetMap or Google Places.
+
+![Google key field](docs/screenshots/setup/setup-google-crm.png)
+![Source choice in Add leads](docs/screenshots/setup/add-leads-google.png)
+</details>
+
+<details><summary><b>Email</b> (SMTP sending, IMAP replies, Gmail app password)</summary>
+
+1. Use a dedicated mailbox. **Gmail:** turn on 2-Step Verification, then create an [app password](https://support.google.com/accounts/answer/185833)
+   (Google Account → Security → App passwords). Use that 16-character password, not your normal one. Workspace admins may need to allow it.
+2. `/setup` step 6 (or `.env`): SMTP host `smtp.gmail.com`, port `587`, STARTTLS, your address as user, the app password, and the From address.
+   Other providers: use the host and port from their docs (often 587 STARTTLS or 465 SSL).
+3. Optional replies: IMAP host `imap.gmail.com` (port 993, SSL; user and password default to the SMTP ones). Enable IMAP in Gmail → Settings → Forwarding and POP/IMAP.
+4. Press **Test email login** (it only logs in, never sends), then save.
+5. A lead with an email and no phone now gets an email draft with subject and body. Approve it like any draft; it uses the same queue.
+6. Start with a low `EMAIL_DAILY_LIMIT`, set SPF/DKIM/DMARC for your domain and check the cold-email law where you and your leads live.
+
+![Email fields on /setup](docs/screenshots/setup/setup-email.png)
+![A lead with an email draft](docs/screenshots/setup/lead-email-draft.png)
+</details>
+
+<details><summary><b>CRM</b> (API key, webhooks, n8n example)</summary>
+
+1. `/setup` step 4: press **Generate random key** under *CRM API key* and under *Webhook signing secret* (or set `API_KEY` / `CRM_WEBHOOK_SECRET` in `.env`). Save both somewhere safe.
+2. Test the API: `curl -H "Authorization: Bearer YOUR_API_KEY" http://localhost:8000/api/v1/leads` returns JSON.
+3. **n8n, Lead Agent to CRM:** in [n8n](https://docs.n8n.io/) add a **Webhook** node (POST), copy its *Production URL* into *CRM webhook URL* (`CRM_WEBHOOK_URL`) and activate the workflow.
+   Add a **Switch** on `{{$json.body.event}}` (`lead.created`, `reply.received`, `lead.stage_changed`) leading to your CRM node
+   ([HubSpot](https://docs.n8n.io/integrations/builtin/app-nodes/n8n-nodes-base.hubspot/), Pipedrive, Zoho, ...).
+4. **n8n, CRM to Lead Agent:** CRM trigger → **HTTP Request** node: `POST http://localhost:8000/api/v1/leads`, header `Authorization: Bearer YOUR_API_KEY`,
+   JSON body with `name`, `email` or `phone`, and `external_id` = the CRM record id. n8n in Docker: use `host.docker.internal` instead of `localhost`.
+5. Signature checks, all payloads and Zapier/Make recipes: [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md). Drafts still need your approval; the API cannot send.
+
+![CRM keys on /setup](docs/screenshots/setup/setup-google-crm.png)
+</details>
+
+<details><summary><b>ntfy</b> (push to your phone on replies)</summary>
+
+1. Install the free **ntfy** app ([iOS](https://apps.apple.com/app/ntfy/id1625396347) / [Android](https://play.google.com/store/apps/details?id=io.heckel.ntfy)) or use [ntfy.sh](https://ntfy.sh).
+2. Pick a long random topic: `python3 -c "import secrets;print('lead-'+secrets.token_urlsafe(16))"`. The topic name is the only secret, so keep it unguessable.
+3. In the app: **+** → subscribe to that topic on the default server.
+4. Put `NTFY_TOPIC=<topic>` in `.env` and restart. You get "New reply from <name>" (never the message text).
+</details>
+
+<details><summary><b>Docker Compose</b> (everything in containers)</summary>
 
 Alternative to `setup.py` + `./run.sh`: only Docker is needed.
 
@@ -155,17 +260,30 @@ Alternative to `setup.py` + `./run.sh`: only Docker is needed.
 cp .env.example .env     # set the three passwords; Apple Silicon: WAHA_IMAGE=devlikeapro/waha:gows-arm
 docker compose -f docker-compose.full.yml up -d --build
 ```
-Open http://localhost:8000. The dashboard, WAHA and your data (named volumes `data`, `waha_sessions`) all live in Docker.
+Open http://localhost:8000. Dashboard, WAHA and your data (volumes `data`, `waha_sessions`) all live in Docker.
 
-- **Ollama on your computer (default):** install it, `ollama pull llama3.2:3b`, and add
-  `DOCKER_OLLAMA_URL=http://host.docker.internal:11434` to `.env` (on Linux, Ollama must listen on all interfaces: `OLLAMA_HOST=0.0.0.0`).
-- **Ollama in Docker (CPU only, slower on Mac):** add `--profile ollama` to the command above, then once:
+- **Ollama on your computer (default):** install it, `ollama pull llama3.2:3b`, add `DOCKER_OLLAMA_URL=http://host.docker.internal:11434` to `.env` (Linux: `OLLAMA_HOST=0.0.0.0`).
+- **Ollama in Docker (CPU only, slower on Mac):** add `--profile ollama`, then once:
   `docker compose -f docker-compose.full.yml --profile ollama run --rm ollama-pull`.
-- Other ports: `DASHBOARD_PORT`, `WAHA_PORT`; `DASHBOARD_BIND=0.0.0.0` to expose on your network (set a dashboard password first).
-- Backups of the database are in the `data` volume (`/data/backups`): `docker compose -f docker-compose.full.yml cp dashboard:/data/backups ./backups-copy`.
-- Apple Silicon: use the `gows-arm` image; Docker runs through Colima/Docker Desktop, so allow it ~4 GB RAM.
+- Ports: `DASHBOARD_PORT`, `WAHA_PORT`; `DASHBOARD_BIND=0.0.0.0` exposes it on your network (set a dashboard password first).
+- Backups are in the `data` volume: `docker compose -f docker-compose.full.yml cp dashboard:/data/backups ./backups-copy`.
+- Apple Silicon: use the `gows-arm` image and give Docker/Colima about 4 GB RAM.
+- The plain `docker-compose.yml` (WAHA only) is what `setup.py` uses; do not run both on the same ports.
+</details>
 
-The plain `docker-compose.yml` (WAHA only) is what `setup.py` uses with `./run.sh`; do not run both at once on the same ports.
+<details><summary><b>Remote access</b> (use it from your iPhone)</summary>
+
+1. Install [Tailscale](https://tailscale.com/download) on the Mac and the iPhone and sign in to the **same account** on both.
+2. On the Mac: `HOST=127.0.0.1 ./run.sh`, then `tailscale serve --bg 8000`.
+3. Open the `https://your-mac.your-tailnet.ts.net` link it prints on the iPhone, then *Add to Home Screen*.
+4. Keep `DASHBOARD_PASSWORD` set. **Never** port-forward 8000 or use `tailscale funnel` for the dashboard.
+
+Full guide and safety rules: [docs/REMOTE_ACCESS.md](docs/REMOTE_ACCESS.md).
+</details>
+
+## Run with Docker
+
+Only Docker needed: `docker compose -f docker-compose.full.yml up -d --build`. Steps: [Setup guides → Docker Compose](#setup-guides).
 
 ## Sending queue
 
@@ -178,7 +296,7 @@ their error and "Try again".
 
 ## Email channel
 
-Off until you set `SMTP_HOST` and `SMTP_FROM` (on `/setup` step 6 or in `.env`; see [.env.example](.env.example)). Then:
+Off until you set `SMTP_HOST` and `SMTP_FROM` (on `/setup` step 6 or in `.env`; Gmail app-password steps in [Setup guides](#setup-guides)). Then:
 
 - **Per lead**: WhatsApp if the lead has a phone, otherwise email. Change it on the lead page (Channel), or press "Switch to Email/WhatsApp" on a draft.
   Replies are answered on the channel the lead wrote on; follow-ups use the channel of your last message.
@@ -208,36 +326,20 @@ Only in `.env`: `DASHBOARD_PASSWORD`, `WAHA_API_KEY`, `WEBHOOK_TOKEN`, `WAHA_WEB
 Plug it into HubSpot, Zoho, Pipedrive, Salesforce, Odoo or anything else with a REST API (`API_KEY`, `/api/v1`) and
 outgoing signed webhooks (`CRM_WEBHOOK_URL`, `CRM_WEBHOOK_SECRET`), directly or via n8n, Zapier or Make. The API
 cannot send WhatsApp messages; drafts still need your approval. Details, event payloads, signature checks and recipes:
-[docs/INTEGRATIONS.md](docs/INTEGRATIONS.md).
+[docs/INTEGRATIONS.md](docs/INTEGRATIONS.md). Key and n8n steps: [Setup guides → CRM](#setup-guides).
 
 ## Google Places (optional lead source)
 
-OpenStreetMap is thin in many countries. Set `GOOGLE_PLACES_API_KEY` in `.env`
-(create a key and enable "Places API (New)" in the [Google Cloud console](https://developers.google.com/maps/documentation/places/web-service/get-api-key))
-and the Find form gets a source choice. It uses the official Text Search API (no scraping), up to 60 results per search.
-Google bills per request, but its free monthly credit covers typical small use; check
-[current pricing](https://developers.google.com/maps/billing-and-pricing/pricing) and set a quota cap in the console.
+Set `GOOGLE_PLACES_API_KEY` and the Find form gets a Google source (official Text Search API, no scraping, up to 60 results; Google bills
+per request, its free monthly credit covers small use). Key steps: [Setup guides → Google Places](#setup-guides).
 
 Using it from your phone: [docs/REMOTE_ACCESS.md](docs/REMOTE_ACCESS.md) (Tailscale; never expose port 8000 to the internet).
 
 ## Official WhatsApp Cloud API
 
-WAHA links a normal account (ban risk). For a ToS-compliant setup, set `WHATSAPP_PROVIDER=cloud`; the dashboard,
-limits, AI tags, follow-ups and STOP handling work the same, and the WhatsApp tab shows Cloud status instead of pairing.
-
-1. At developers.facebook.com create a Business app, add the **WhatsApp** product and a business phone number.
-2. Create a permanent token (System User) and copy the **Phone number ID** and the app's **App secret**.
-3. In `.env`: `WHATSAPP_PROVIDER=cloud`, `WA_CLOUD_TOKEN`, `WA_CLOUD_PHONE_NUMBER_ID`, `WA_CLOUD_APP_SECRET`,
-   and a `WA_CLOUD_VERIFY_TOKEN` you invent.
-4. In Meta's WhatsApp > Configuration set the webhook to `https://YOUR-PUBLIC-URL/webhook/cloud` with that verify token
-   and subscribe to **messages**. It must be reachable from the internet (see `docs/REMOTE_ACCESS.md`); it skips the
-   dashboard login but rejects any request without a valid `X-Hub-Signature-256`.
-5. **24-hour rule:** free text can only go to leads who wrote to you in the last 24 hours. For first contact create a
-   message template (category *Marketing*, one body variable `{{1}}`, e.g. `Hi! {{1}}`) in WhatsApp Manager, wait for
-   approval (minutes to a day), then set `WA_CLOUD_TEMPLATE` (+ `WA_CLOUD_TEMPLATE_LANG`). The draft text is sent in
-   `{{1}}`. Without a template, drafts to new leads are blocked and the card says why.
-6. **Costs:** Meta charges per delivered template message (marketing templates roughly a few US cents to ~10 cents,
-   varying by country; check Meta's current pricing). Replies inside the 24-hour window are free.
+WAHA links a normal account (ban risk). For a ToS-compliant setup set `WHATSAPP_PROVIDER=cloud`; limits, AI tags, follow-ups and
+STOP handling work the same. Free text only inside 24 hours of the lead's last message; first contact needs an approved template.
+Steps, webhook and costs: [Setup guides → WhatsApp Cloud API](#setup-guides).
 
 ## WhatsApp limits, ToS and ban risk
 
