@@ -7,6 +7,8 @@
 *.db-wal
 *.db-shm
 leads.db
+demo.db
+demo_backups/
 backups/
 waha_sessions/
 *.log

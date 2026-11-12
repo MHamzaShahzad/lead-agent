@@ -34,6 +34,8 @@ def is_cloud():
 
 
 def status():
+    if config.DEMO_MODE:
+        return "WORKING"
     if is_cloud():
         return wa_cloud.info()[0]
     try:
@@ -45,6 +47,8 @@ def status():
 
 def session_info():
     """Returns (status, linked_number or None)."""
+    if config.DEMO_MODE:
+        return "WORKING", "15550100000"
     if is_cloud():
         return wa_cloud.info()
     try:
@@ -196,7 +200,7 @@ def window_note(phone):
 
 def typing(phone, on=True):
     """Show/hide the 'typing...' indicator (WAHA only). Best effort: never raises."""
-    if is_cloud():
+    if is_cloud() or config.DEMO_MODE:
         return
     try:
         httpx.post(f"{config.WAHA_URL}/api/{'startTyping' if on else 'stopTyping'}", headers=_headers(), timeout=5,
@@ -208,6 +212,9 @@ def typing(phone, on=True):
 def send_text(phone, text):
     """Send a message through the configured provider. On Cloud, a lead outside the 24h window gets the
     approved first-contact template (text filled into {{1}})."""
+    if config.DEMO_MODE:
+        from . import demo
+        return demo.fake_whatsapp(phone, text)
     if is_cloud():
         try:
             return wa_cloud.send(phone, text, chat_id)

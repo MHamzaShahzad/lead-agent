@@ -21,6 +21,8 @@ def _chat(system, user, as_json=False, timeout=120):
             "options": {"temperature": 0.3}}
     if as_json:
         body["format"] = "json"
+    if config.DEMO_MODE:
+        timeout = min(timeout, 20)      # demo: use a local Ollama if there is one, else the canned fallbacks right away
     try:
         r = httpx.post(f"{config.OLLAMA_URL}/api/chat", json=body, timeout=timeout)
         r.raise_for_status()

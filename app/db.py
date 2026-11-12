@@ -83,6 +83,8 @@ def last_backup():
 
 def backup_if_due():
     """At most one backup per 24 hours. Returns the new path or None."""
+    if config.DEMO_MODE:
+        return None
     last = last_backup()
     if last and (datetime.now() - last) < timedelta(hours=24):
         return None

@@ -16,7 +16,13 @@ def _load_env():
 
 _load_env()
 
-DB_PATH = os.getenv("DB_PATH", str(ROOT / "leads.db"))
+# Demo mode: sample data, fake WhatsApp/email, its own database. Never touches leads.db, .env or real services.
+DEMO_MODE = os.getenv("DEMO_MODE", "").strip() in ("1", "true", "yes")
+DB_PATH = str(ROOT / "demo.db") if DEMO_MODE else os.getenv("DB_PATH", str(ROOT / "leads.db"))
+if DEMO_MODE:
+    DB_PATH = os.getenv("DEMO_DB_PATH", DB_PATH)
+    if Path(DB_PATH).resolve().name == "leads.db":
+        raise SystemExit("Demo mode refuses to use leads.db. Set DEMO_DB_PATH to another file.")
 OLLAMA_URL = os.getenv("OLLAMA_URL", "http://localhost:11434")
 OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
 WAHA_URL = os.getenv("WAHA_URL", "http://localhost:3000")
@@ -81,6 +87,16 @@ EMAIL_DAILY_LIMIT = int(os.getenv("EMAIL_DAILY_LIMIT") or 30)
 FOLLOWUP_DAYS = [int(x) for x in os.getenv("FOLLOWUP_DAYS", "3,7").split(",") if x.strip()]
 
 
+if DEMO_MODE:
+    # Fakes stand in for WhatsApp and email; nothing may leave the machine except an optional local Ollama call.
+    WHATSAPP_PROVIDER, NTFY_TOPIC, CRM_WEBHOOK_URL, CRM_WEBHOOK_SECRET, API_KEY = "waha", "", "", "", ""
+    SMTP_HOST, SMTP_FROM, IMAP_HOST = "demo.invalid", "Demo <demo@example.com>", ""
+    BACKUP_DIR = str(ROOT / "demo_backups")
+    DAILY_SEND_LIMIT = EMAIL_DAILY_LIMIT = 1000
+    MIN_SECONDS_BETWEEN_SENDS = SEND_GAP_MIN = SEND_GAP_MAX = 2
+    SEND_TYPING, SEND_START, SEND_END, SEND_SCHEDULE = False, "00:00", "23:59", ""
+    MY_BUSINESS = os.getenv("MY_BUSINESS_DEMO", "We build modern websites and WhatsApp automation for small local businesses.")
+
 ENV_PATH = ROOT / ".env"
 SETTING_KEYS = ("BRAND_NAME", "BRAND_TAGLINE", "MY_BUSINESS", "OLLAMA_MODEL", "DAILY_SEND_LIMIT", "MIN_SECONDS_BETWEEN_SENDS", "SEND_GAP_MIN", "SEND_GAP_MAX", "FOLLOWUP_DAYS",
                 "SEND_START", "SEND_END", "SEND_SCHEDULE", "OPTOUT_ENABLED", "OPTOUT_LINE",
@@ -96,7 +112,7 @@ SETUP_DONE = os.getenv("SETUP_DONE", "") == "1"
 
 def needs_setup():
     """True on a fresh install: no SETUP_DONE flag and no business description saved yet (existing installs have one)."""
-    return not SETUP_DONE and not os.environ.get("MY_BUSINESS", "").strip()
+    return not DEMO_MODE and not SETUP_DONE and not os.environ.get("MY_BUSINESS", "").strip()
 
 
 def mask(v):
@@ -117,11 +133,12 @@ def save_settings(values):
         else:
             out.append(line)
     out += [f"{k}={v}" for k, v in values.items() if k not in seen]
-    tmp = ENV_PATH.with_suffix(".tmp")
-    tmp.write_text("\n".join(out) + "\n")
-    if ENV_PATH.exists():
-        tmp.chmod(ENV_PATH.stat().st_mode & 0o777)
-    tmp.replace(ENV_PATH)
+    if not DEMO_MODE:                      # demo mode changes settings in memory only, never the real .env
+        tmp = ENV_PATH.with_suffix(".tmp")
+        tmp.write_text("\n".join(out) + "\n")
+        if ENV_PATH.exists():
+            tmp.chmod(ENV_PATH.stat().st_mode & 0o777)
+        tmp.replace(ENV_PATH)
     g = globals()
     for k, v in values.items():
         os.environ[k] = v

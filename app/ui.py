@@ -5,7 +5,7 @@ import json
 import re as _re
 from html import escape
 
-from . import config, db, emailer, whatsapp
+from . import config, db, demo, emailer, whatsapp
 
 
 def e(v):
@@ -159,6 +159,7 @@ def week_hours():
 
 
 def page(*, results=None, working=0, replies_week=0, msg, ai_status, wa_status, wa_number, last_backup=None, campaigns=(), reminders=(), sent_today, leads, drafts, inbox, followups, queued=(), paused=False):
+    demo_bar = demo.banner_html() if config.DEMO_MODE else ""
     ai_ok = ai_status["up"] and ai_status["model_ready"]
     wa_ok = wa_status == "WORKING"
     limit = config.DAILY_SEND_LIMIT
@@ -469,7 +470,7 @@ def page(*, results=None, working=0, replies_week=0, msg, ai_status, wa_status, 
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><meta name="theme-color" content="#f6f6f3" media="(prefers-color-scheme: light)"><meta name="theme-color" content="#0e0f12" media="(prefers-color-scheme: dark)">
 <title>{e(config.BRAND_NAME)}</title><style>{CSS}</style></head><body>
-<a class="skip" href="#main">Skip to content</a>
+<a class="skip" href="#main">Skip to content</a>{demo_bar}
 <div class="app">
 <aside class="side" aria-label="Sections">
   {brand_html(True)}
@@ -517,6 +518,7 @@ BACK_TO = {"today": ("approvals", "Today"), "chats": ("replies", "Chats"), "lead
 
 
 def lead_page(lead, *, msg, convo, followups, notes=(), reminders=(), came_from=""):
+    demo_bar = demo.banner_html() if config.DEMO_MODE else ""
     i = lead["id"]
     bkey = came_from if came_from in BACK_TO else "leads"
     bsec, blabel = BACK_TO[bkey]
@@ -568,7 +570,7 @@ def lead_page(lead, *, msg, convo, followups, notes=(), reminders=(), came_from=
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><title>{e(lead['name'])} · {e(config.BRAND_NAME)}</title>
 <style>{CSS}</style></head><body class="solo">
-<a class="skip" href="#main">Skip to content</a>
+<a class="skip" href="#main">Skip to content</a>{demo_bar}
 <header class="topbar show"><a class="backlink" id="backlink" href="/#{bsec}" data-from="{bkey}" data-known="{1 if came_from in BACK_TO else 0}">{ic('back', 18)}<span>{blabel}</span></a>{brand_html()}</header>
 <main class="main detail" id="main">
 {flash_html(msg)}
@@ -583,6 +585,7 @@ def lead_page(lead, *, msg, convo, followups, notes=(), reminders=(), came_from=
 {'<div class="warn bad">This lead asked us to stop. Messages cannot be sent to them.</div>' if lead['status'] == 'opted_out' else ''}
 <div class="dgrid"><div>
   <div class="card"><h3>Conversation</h3>{chat}
+    {demo.simulate_html(lead, nxt) if config.DEMO_MODE else ''}
     {compose}</div></div>
 <div>
   <div class="card"><h3>Why this score</h3>
@@ -749,7 +752,7 @@ button:active:not(:disabled),.btn:active{transform:scale(.97)}button:disabled{op
 .who .name{color:var(--fg);font-weight:700;font-size:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.who .sub{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .dr{display:flex;align-items:center;gap:8px;flex:none}
 .pick{display:flex;align-items:center;gap:6px;font-size:13px;color:var(--sub);cursor:pointer;padding:10px 6px;margin:-10px -6px}
-.thread{display:flex;flex-direction:column;gap:6px;background:var(--bg);border-radius:14px;padding:10px 12px;margin-bottom:12px}
+.demobar{background:#fdecc8;color:#5a3d00;text-align:center;font-size:13px;padding:6px 12px;border-bottom:1px solid #e8c777;position:relative;z-index:50}.demobar .sub{color:#7a5a15}.demosim{display:flex;flex-direction:column;gap:6px;margin-top:12px;padding:10px;border:1px dashed #e8c777;border-radius:12px}.thread{display:flex;flex-direction:column;gap:6px;background:var(--bg);border-radius:14px;padding:10px 12px;margin-bottom:12px}
 .tl{font-size:11.5px;font-weight:650;color:var(--faint);text-transform:uppercase;letter-spacing:.06em}
 .b{max-width:86%;padding:7px 11px;border-radius:14px;font-size:14px;white-space:pre-wrap;word-break:break-word}.b .m{display:block;font-size:11px;color:var(--sub);margin-top:2px;white-space:normal}
 .b.in{align-self:flex-start;background:var(--card);border-bottom-left-radius:5px}.b.out{align-self:flex-end;background:var(--wa-soft);border-bottom-right-radius:5px}

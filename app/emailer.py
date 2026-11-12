@@ -68,6 +68,9 @@ def send(to, subject, body, in_reply_to=None, references=None):
     if not valid_address(to):
         raise RuntimeError("The lead has no valid email address.")
     m = build(to, subject, body, in_reply_to, references)
+    if config.DEMO_MODE:
+        from . import demo
+        return demo.fake_email(m)
     s = _smtp()
     try:
         s.send_message(m)

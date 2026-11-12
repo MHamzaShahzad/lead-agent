@@ -16,7 +16,7 @@ from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse,
 
 from urllib.parse import quote
 
-from . import ai, api, auth, config, db, emailer, finder, notify, sendqueue, setup_page, ui, wa_cloud, webhooks, whatsapp
+from . import ai, api, auth, config, db, demo, emailer, finder, notify, sendqueue, setup_page, ui, wa_cloud, webhooks, whatsapp
 
 STOP_WORDS = re.compile(r"^\s*(stop|unsubscribe|band karo|mat bhejo|no thanks)\s*[.!]*\s*$", re.I)
 EMAIL_STOP = re.compile(r"\b(unsubscribe|remove me|stop (emailing|sending|contacting)|do not (email|contact))\b", re.I)
@@ -55,6 +55,8 @@ async def _email_loop():
 @asynccontextmanager
 async def lifespan(app):
     db.init()
+    if config.DEMO_MODE:
+        demo.seed()
     sendqueue.recover()
     tasks = [asyncio.create_task(_followup_loop())]
     if config.QUEUE_WORKER:
@@ -228,6 +230,17 @@ def run_followups():
 
 
 # ---------------- routes ----------------
+@app.post("/demo/simulate-reply")
+def demo_simulate_reply(lead_id: int = Form(...), preset: str = Form(""), text: str = Form(""), next: str = Form("")):
+    if not config.DEMO_MODE:
+        return Response(status_code=404)
+    sent = demo.simulate_reply(lead_id, text.strip() or preset)
+    if sent is None:
+        return back("Lead not found.")
+    return back("Demo reply received. A reply draft is ready for you." if sent != "STOP" else "Demo reply: STOP. The lead is opted out.",
+                next or f"/leads/{lead_id}")
+
+
 @app.post("/webhook/waha")
 async def waha_webhook(request: Request, tasks: BackgroundTasks, token: str = ""):
     if config.WEBHOOK_TOKEN and not hmac.compare_digest(token.encode(), config.WEBHOOK_TOKEN.encode()):
