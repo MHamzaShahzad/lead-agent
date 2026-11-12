@@ -6,13 +6,9 @@ Everything runs on your own computer: no cloud AI, no paid API, your leads never
 
 > ⚠️ This uses your normal WhatsApp number through an unofficial gateway. Read [WhatsApp limits and ban risk](#whatsapp-limits-tos-and-ban-risk) first.
 
-![Dashboard screenshot](docs/screenshots/today.png)
-<!-- Add your own screenshots to docs/screenshots/ (today.png, chats.png, lead.png). -->
+![Today screen on desktop](docs/screenshots/today.png)
 
-```
-OpenStreetMap / CSV / manual -> SQLite (leads.db, auto-dedupe) -> Ollama: score + draft
-WhatsApp <-> WAHA (Docker) <-webhook-> FastAPI dashboard: you approve -> WAHA -> WhatsApp
-```
+![Today, Chats and a lead on a phone](docs/screenshots/phone.png)
 
 ## Features
 
@@ -27,38 +23,69 @@ WhatsApp <-> WAHA (Docker) <-webhook-> FastAPI dashboard: you approve -> WAHA ->
 - Lead page with chat, notes and reminders, campaign tags, "find email/phone on website", CSV export, reply-rate stats.
 - Daily backup of `leads.db` to `backups/` (last 14). Optional phone push on replies via [ntfy](https://ntfy.sh).
 
-## Requirements
+## Setup (about 15 minutes)
 
-| | macOS | Linux | Windows 10/11 |
-|---|---|---|---|
-| Python 3.11+ | `brew install python` | distro package | [python.org](https://www.python.org/downloads/) (tick "Add to PATH") |
-| Ollama | [ollama.com](https://ollama.com/download) | `curl -fsSL https://ollama.com/install.sh \| sh` | [ollama.com](https://ollama.com/download) |
-| Docker | Docker Desktop, or `brew install colima docker docker-compose && colima start` | Docker Engine + compose plugin | Docker Desktop (WSL 2) |
+You need a computer that stays on while you use it (Mac, Linux or Windows 10/11, 8 GB RAM) and a phone with
+WhatsApp. A separate business number is best.
 
-About 4 GB free RAM for the AI model (`llama3.2:3b`) and a phone with WhatsApp (a separate business number is best).
+### 1. Install three free tools
 
-## Quick start
+| Tool | What it's for | macOS | Windows | Linux |
+|---|---|---|---|---|
+| **Python 3.11+** | runs the dashboard | [python.org](https://www.python.org/downloads/) | [python.org](https://www.python.org/downloads/) (tick **Add to PATH**) | usually installed |
+| **Ollama** | the local AI | [ollama.com/download](https://ollama.com/download) | [ollama.com/download](https://ollama.com/download) | `curl -fsSL https://ollama.com/install.sh \| sh` |
+| **Docker** | the WhatsApp gateway | [Docker Desktop](https://www.docker.com/products/docker-desktop/) | [Docker Desktop](https://www.docker.com/products/docker-desktop/) | [Docker Engine](https://docs.docker.com/engine/install/) |
+
+Open Ollama and Docker once so they are running. (Mac alternative to Docker Desktop:
+`brew install colima docker docker-compose && colima start`.)
+
+### 2. Download and run the setup
+
+[Download the ZIP](https://github.com/MHamzaShahzad/lead-agent/archive/refs/heads/main.zip) and unzip it, or `git clone` this repo. Open a terminal
+in the folder (Windows: right-click the folder → *Open in Terminal*) and run:
 
 ```bash
-git clone https://github.com/<you>/<repo>.git && cd <repo>
-cp .env.example .env          # Windows: copy .env.example .env
+python3 setup.py
 ```
+Windows: `py setup.py`
 
-1. **Edit `.env`**: set `DASHBOARD_PASSWORD`, `WAHA_API_KEY` and `WEBHOOK_TOKEN` to long random values
-   (e.g. `python3 -c "import secrets;print(secrets.token_urlsafe(24))"`), describe your business in `MY_BUSINESS`,
-   set `DEFAULT_COUNTRY_CODE`, and pick `WAHA_IMAGE`: `devlikeapro/waha:gows` (Intel/AMD) or
+It asks what you sell, a name for the dashboard and your country code, then does the rest: creates `.env` with
+random passwords, installs everything, downloads the AI model (~2 GB) and starts the WhatsApp gateway.
+**It prints your dashboard password at the end - save it.** Safe to run again if something failed.
+
+### 3. Start the dashboard
+
+```bash
+./run.sh
+```
+Windows: `powershell -ExecutionPolicy Bypass -File .\run.ps1`
+
+Open http://localhost:8000 and sign in. Keep the terminal open while you use it (Ctrl+C stops it).
+
+### 4. Link your WhatsApp
+
+In the dashboard: **More → WhatsApp**, type your number with country code and press **Get pairing code**.
+On your phone: WhatsApp → Settings → **Linked devices** → **Link a device** → *Link with phone number instead*,
+and type the 8-character code.
+
+That's it. Go to **Add leads**, search e.g. "dentist" in your city, check the AI's messages in **Today** and press
+Send on the ones you like.
+
+<details><summary>Manual setup (without setup.py)</summary>
+
+1. `cp .env.example .env` (Windows: `copy .env.example .env`) and edit it: set `DASHBOARD_PASSWORD`, `WAHA_API_KEY`
+   and `WEBHOOK_TOKEN` to long random values (`python3 -c "import secrets;print(secrets.token_urlsafe(24))"`),
+   `MY_BUSINESS`, `DEFAULT_COUNTRY_CODE`, and `WAHA_IMAGE`: `devlikeapro/waha:gows` (Intel/AMD) or
    `devlikeapro/waha:gows-arm` (Apple Silicon / ARM).
-2. **Local AI**: `ollama pull llama3.2:3b` (Ollama must be running: open the app, or `ollama serve`).
-3. **WhatsApp gateway**: `docker compose --env-file .env up -d`
-4. **Dashboard**: `./run.sh` (macOS/Linux) or `powershell -ExecutionPolicy Bypass -File .\run.ps1` (Windows).
-   Open http://localhost:8000 and sign in with `DASHBOARD_PASSWORD`.
-5. **Link WhatsApp**: in the dashboard go to **More → WhatsApp**, enter your number with country code and press
-   *Get pairing code*. You get an 8-character **pairing code**: on your phone open WhatsApp → Settings → Linked devices →
-   Link a device → *Link with phone number instead*, and type the code. (Alternatively scan the QR code in the WAHA
-   dashboard at http://localhost:3000/dashboard, user `admin`, password = `WAHA_API_KEY`.)
-6. Add a few leads (**Add leads**), check the drafts in **Today**, and send.
+2. `ollama pull llama3.2:3b`
+3. `docker compose --env-file .env up -d`
+4. `./run.sh` (creates `.venv` and installs requirements the first time).
+5. Link WhatsApp as in step 4, or scan the QR code in the WAHA dashboard at http://localhost:3000/dashboard
+   (user `admin`, password = `WAHA_API_KEY`).
+</details>
 
-Restart after code or `.env` changes: stop the dashboard (Ctrl+C, or `pkill -f "uvicorn app.main:app"`) and run it again.
+**Every day after:** make sure Ollama and Docker are running, then `./run.sh`. After changing `.env` by hand,
+restart the dashboard (Ctrl+C, then `./run.sh`).
 
 ## Configuration
 
