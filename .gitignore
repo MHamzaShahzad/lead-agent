@@ -1,0 +1,25 @@
+# Secrets and private data - never commit
+.env
+.env.*
+!.env.example
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+leads.db
+backups/
+waha_sessions/
+*.log
+logs/
+
+# Python / tooling
+.venv/
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.coverage
+htmlcov/
+.claude/
+.DS_Store
+*.tmp

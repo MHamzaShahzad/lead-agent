@@ -1,0 +1,23 @@
+# WAHA = open-source WhatsApp HTTP API (github.com/devlikeapro/waha), used as the WhatsApp gateway.
+# Start:  docker compose --env-file .env up -d   then link your phone (see README).
+# Ollama runs natively on the computer (faster, can use the GPU) - not in Docker.
+services:
+  waha:
+    # gows = lightweight Go engine, no Chrome. Intel/AMD: devlikeapro/waha:gows  Apple Silicon/ARM: devlikeapro/waha:gows-arm
+    image: ${WAHA_IMAGE:-devlikeapro/waha:gows}
+    container_name: waha
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3000:3000"   # only this computer can reach the WAHA API
+    environment:
+      WAHA_API_KEY: ${WAHA_API_KEY:?Set WAHA_API_KEY in .env}
+      WAHA_DASHBOARD_USERNAME: admin
+      WAHA_DASHBOARD_PASSWORD: ${WAHA_API_KEY:?Set WAHA_API_KEY in .env}
+      WHATSAPP_DEFAULT_ENGINE: GOWS
+      # Incoming messages are pushed to the Python app running on the host:
+      WHATSAPP_HOOK_URL: http://host.docker.internal:8000/webhook/waha?token=${WEBHOOK_TOKEN:-}
+      WHATSAPP_HOOK_EVENTS: message
+    volumes:
+      - ./waha_sessions:/app/.sessions
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
