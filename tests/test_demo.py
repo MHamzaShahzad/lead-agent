@@ -22,6 +22,10 @@ def demo(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "DAILY_SEND_LIMIT", 1000)
     monkeypatch.setattr(config, "EMAIL_DAILY_LIMIT", 1000)
     monkeypatch.setattr(config, "CRM_WEBHOOK_URL", "")
+    monkeypatch.setattr(config, "DASHBOARD_PASSWORD", "")      # a real .env password must not leak in
+    monkeypatch.setattr(config, "WEBHOOK_TOKEN", "")
+    monkeypatch.setattr(config, "WAHA_WEBHOOK_HMAC_KEY", "")
+    monkeypatch.setattr(config, "NTFY_TOPIC", "")
     from app import ai, demo as d
 
     def boom(*a, **k):
