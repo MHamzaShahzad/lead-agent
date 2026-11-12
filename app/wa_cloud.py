@@ -105,6 +105,20 @@ def info():
         return "offline", None
 
 
+def check(token, phone_number_id):
+    """Read-only connection test (GET phone-number info). Never sends a message. Returns (ok, text)."""
+    try:
+        r = httpx.get(f"{GRAPH}/{phone_number_id}", headers={"Authorization": f"Bearer {token}"}, timeout=8,
+                      params={"fields": "display_phone_number,verified_name"})
+    except Exception:
+        return False, "Could not reach graph.facebook.com."
+    if r.status_code in (400, 401, 403):
+        return False, "Meta rejected the token or phone number ID."
+    if r.status_code >= 300:
+        return False, f"Meta returned HTTP {r.status_code}."
+    return True, "Connected: " + (r.json().get("display_phone_number") or "phone number found")
+
+
 def verify_signature(raw, header):
     if not config.WA_CLOUD_APP_SECRET:
         return False

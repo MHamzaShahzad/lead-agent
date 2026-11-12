@@ -91,6 +91,9 @@ random passwords, installs everything, downloads the AI model (~2 GB) and starts
 
 ### 3. Start the dashboard
 
+On first run the dashboard opens a guided **setup page** (`/setup`: password, business, WhatsApp, API keys, sending hours); you can reopen it from Settings.
+
+
 ```bash
 ./run.sh
 ```

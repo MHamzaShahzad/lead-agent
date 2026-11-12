@@ -16,7 +16,7 @@ from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse,
 
 from urllib.parse import quote
 
-from . import ai, api, auth, config, db, finder, notify, sendqueue, ui, wa_cloud, webhooks, whatsapp
+from . import ai, api, auth, config, db, finder, notify, sendqueue, setup_page, ui, wa_cloud, webhooks, whatsapp
 
 STOP_WORDS = re.compile(r"^\s*(stop|unsubscribe|band karo|mat bhejo|no thanks)\s*[.!]*\s*$", re.I)
 
@@ -54,6 +54,7 @@ async def lifespan(app):
 
 app = FastAPI(title="Lead Gen Agent", lifespan=lifespan)
 app.include_router(api.router)
+app.include_router(setup_page.router)
 FLASH = {"msg": ""}
 
 
@@ -68,6 +69,8 @@ async def require_login(request: Request, call_next):
             and not auth.valid(request.cookies.get(auth.COOKIE))):
         nxt = request.url.path + (("?" + request.url.query) if request.url.query else "")
         return RedirectResponse("/login?next=" + quote(nxt), status_code=303)
+    if request.method == "GET" and path == "/" and config.needs_setup():
+        return RedirectResponse("/setup", status_code=303)      # fresh install: guided first-run page
     return await call_next(request)
 
 

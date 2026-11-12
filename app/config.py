@@ -71,7 +71,23 @@ FOLLOWUP_DAYS = [int(x) for x in os.getenv("FOLLOWUP_DAYS", "3,7").split(",") if
 
 ENV_PATH = ROOT / ".env"
 SETTING_KEYS = ("BRAND_NAME", "BRAND_TAGLINE", "MY_BUSINESS", "OLLAMA_MODEL", "DAILY_SEND_LIMIT", "MIN_SECONDS_BETWEEN_SENDS", "SEND_GAP_MIN", "SEND_GAP_MAX", "FOLLOWUP_DAYS",
-                "SEND_START", "SEND_END", "SEND_SCHEDULE", "OPTOUT_ENABLED", "OPTOUT_LINE")
+                "SEND_START", "SEND_END", "SEND_SCHEDULE", "OPTOUT_ENABLED", "OPTOUT_LINE",
+                # first-run setup page (app/setup_page.py)
+                "SETUP_DONE", "DASHBOARD_PASSWORD", "DEFAULT_COUNTRY_CODE", "WHATSAPP_PROVIDER", "WA_CLOUD_TOKEN", "WA_CLOUD_PHONE_NUMBER_ID",
+                "WA_CLOUD_VERIFY_TOKEN", "WA_CLOUD_APP_SECRET", "WA_CLOUD_TEMPLATE", "GOOGLE_PLACES_API_KEY", "API_KEY", "CRM_WEBHOOK_URL",
+                "CRM_WEBHOOK_SECRET")
+SECRET_KEYS = ("DASHBOARD_PASSWORD", "WA_CLOUD_TOKEN", "WA_CLOUD_VERIFY_TOKEN", "WA_CLOUD_APP_SECRET", "GOOGLE_PLACES_API_KEY", "API_KEY", "CRM_WEBHOOK_SECRET")
+SETUP_DONE = os.getenv("SETUP_DONE", "") == "1"
+
+
+def needs_setup():
+    """True on a fresh install: no SETUP_DONE flag and no business description saved yet (existing installs have one)."""
+    return not SETUP_DONE and not os.environ.get("MY_BUSINESS", "").strip()
+
+
+def mask(v):
+    """Display form of a secret: never the whole value."""
+    return "" if not v else ("••••" + v[-4:] if len(v) >= 12 else "••••")
 
 
 def save_settings(values):
@@ -97,4 +113,5 @@ def save_settings(values):
         os.environ[k] = v
         g[k] = ([int(x) for x in v.split(",") if x.strip()] if k == "FOLLOWUP_DAYS"
                 else int(v) if k in ("DAILY_SEND_LIMIT", "MIN_SECONDS_BETWEEN_SENDS", "SEND_GAP_MIN", "SEND_GAP_MAX")
-                else (v == "1") if k == "OPTOUT_ENABLED" else v)
+                else (v == "1") if k in ("OPTOUT_ENABLED", "SETUP_DONE") else v.lstrip("+") if k == "DEFAULT_COUNTRY_CODE"
+                else v.lower() if k == "WHATSAPP_PROVIDER" else v)

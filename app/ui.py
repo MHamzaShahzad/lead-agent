@@ -385,7 +385,8 @@ def page(*, results=None, working=0, replies_week=0, msg, ai_status, wa_status, 
         <div class="card"><h3>AI model</h3>
           <label class="lbl">Ollama model name</label><input name="ollama_model" value="{e(config.OLLAMA_MODEL)}" required>
           <p class="sub">Must already be downloaded in Ollama. The status at the top turns red if it is not.</p></div>
-        <button class="primary block">Save settings</button></form>"""
+        <button class="primary block">Save settings</button></form>
+      <p class="sub" style="text-align:center;margin-top:14px"><a href="/setup">Run setup again</a> (password, WhatsApp, API keys)</p>"""
 
     # ---------- Add leads ----------
     add_html = f"""
