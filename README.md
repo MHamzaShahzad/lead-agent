@@ -3,8 +3,11 @@
 Finds local businesses, scores them with a local AI (Ollama), drafts a personal WhatsApp message for each, and
 tracks replies and follow-ups in a phone-friendly dashboard. **Nothing is sent until you approve it.**
 Everything runs on your own computer: no cloud AI, no paid API, your leads never leave your machine.
+Connects to your CRM through a REST API and webhooks.
 
-> ⚠️ This uses your normal WhatsApp number through an unofficial gateway. Read [WhatsApp limits and ban risk](#whatsapp-limits-tos-and-ban-risk) first.
+> ⚠️ By default this uses your normal WhatsApp number through an unofficial gateway (WAHA). Read
+> [WhatsApp limits and ban risk](#whatsapp-limits-tos-and-ban-risk) first, or use the
+> [official WhatsApp Cloud API](#official-whatsapp-cloud-api) instead.
 
 ![Today screen on desktop](docs/screenshots/today.png)
 
@@ -12,14 +15,21 @@ Everything runs on your own computer: no cloud AI, no paid API, your leads never
 
 ## Features
 
-- **Find leads**: OpenStreetMap search (niche + city), CSV import, or by hand. Duplicates (phone, website, name+city) merge.
+- **Find leads**: OpenStreetMap search (niche + city), [Google Places](#google-places-optional-lead-source) (optional key, much better
+  coverage in many countries), CSV import, or by hand. Duplicates (phone, website, name+city) merge.
 - **AI score (0-100)** and a draft first message per lead, written from your business description. Edit, approve, send;
   or tick several and "Send selected". Quick rewrites: shorter, more formal, Roman Urdu.
 - **Replies**: incoming WhatsApp messages land in Chats with an AI tag (interested, asking price, not now, not
   interested) and a suggested next step. Unknown numbers that write to you become leads.
 - **Follow-ups** after 3 and 7 days (editable); a reply cancels them.
-- **Safety**: approval before every send, daily limit, random gap between messages, per-weekday sending hours, STOP/opt-out, a sending queue that waits for your hours
-  respected everywhere, opt-out line on first messages, optional dashboard password.
+- **[Sending queue](#sending-queue)**: approved messages go out one at a time in the background, with random gaps,
+  only inside your sending hours; the rest wait for the next window. Pause/Resume in Settings.
+- **Safety**: approval before every send, daily limit, per-weekday sending hours, STOP/opt-out respected everywhere,
+  opt-out line on first messages, optional dashboard password.
+- **Two WhatsApp options**: WAHA (free, your own number, unofficial) or the
+  [official WhatsApp Cloud API](#official-whatsapp-cloud-api) (Meta business number, approved templates).
+- **[CRM integration](#crm-integration)**: REST API (`/api/v1`, API key) and signed outgoing webhooks for HubSpot,
+  Zoho, Pipedrive, Salesforce, Odoo, n8n, Zapier or Make. Details: [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md).
 - Lead page with chat, notes and reminders, campaign tags, "find email/phone on website", CSV export, reply-rate stats.
 - Daily backup of `leads.db` to `backups/` (last 14). Optional phone push on replies via [ntfy](https://ntfy.sh).
 
@@ -101,7 +111,8 @@ their error and "Try again".
 Most settings are in the dashboard's **Settings** tab and are saved to `.env`: app name and tagline, business
 description, daily limit, seconds between messages (min/max), follow-up days, per-weekday sending hours, opt-out line, AI model.
 Only in `.env`: `DASHBOARD_PASSWORD`, `WAHA_API_KEY`, `WEBHOOK_TOKEN`, `DEFAULT_COUNTRY_CODE`, `WAHA_IMAGE`,
-`OLLAMA_URL`, `WAHA_URL`, `NTFY_TOPIC`, `API_KEY`, `CRM_WEBHOOK_URL`, `CRM_WEBHOOK_SECRET`. Every option is described in [.env.example](.env.example).
+`OLLAMA_URL`, `WAHA_URL`, `NTFY_TOPIC`, `GOOGLE_PLACES_API_KEY`, `API_KEY`, `CRM_WEBHOOK_URL`, `CRM_WEBHOOK_SECRET`,
+`WHATSAPP_PROVIDER` and the `WA_CLOUD_*` keys, `SEND_TYPING`. Every option is described in [.env.example](.env.example).
 
 ## CRM integration
 
@@ -110,7 +121,9 @@ outgoing signed webhooks (`CRM_WEBHOOK_URL`, `CRM_WEBHOOK_SECRET`), directly or 
 cannot send WhatsApp messages; drafts still need your approval. Details, event payloads, signature checks and recipes:
 [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md).
 
-**Google Places (optional lead source).** OpenStreetMap is thin in many countries. Set `GOOGLE_PLACES_API_KEY` in `.env`
+## Google Places (optional lead source)
+
+OpenStreetMap is thin in many countries. Set `GOOGLE_PLACES_API_KEY` in `.env`
 (create a key and enable "Places API (New)" in the [Google Cloud console](https://developers.google.com/maps/documentation/places/web-service/get-api-key))
 and the Find form gets a source choice. It uses the official Text Search API (no scraping), up to 60 results per search.
 Google bills per request, but its free monthly credit covers typical small use; check
@@ -183,9 +196,11 @@ REAL_OLLAMA=1 .venv/bin/python -m pytest -q   # with the real local AI
 ```
 Windows: `.\.venv\Scripts\python.exe -m pytest -q`. CI runs the tests on every push (`.github/workflows/tests.yml`).
 
-**Code map**: `app/main.py` (routes, webhook, background loop), `app/ui.py` (HTML/CSS/JS, server-rendered, no build
+**Code map**: `app/main.py` (routes, webhooks, background loop), `app/ui.py` (HTML/CSS/JS, server-rendered, no build
 step), `app/db.py` (SQLite), `app/ai.py` (Ollama prompts, reply tags), `app/whatsapp.py` (WAHA, limits, sending hours),
-`app/finder.py` (OSM, CSV, website contacts), `app/notify.py` (ntfy), `app/auth.py`, `app/config.py`.
+`app/wa_cloud.py` (official Cloud API), `app/sendqueue.py` (sending queue worker), `app/api.py` (`/api/v1` REST API),
+`app/webhooks.py` (signed CRM webhooks), `app/finder.py` (OSM, Google Places, CSV, website contacts),
+`app/notify.py` (ntfy), `app/auth.py`, `app/config.py`.
 Build notes: [docs/HISTORY.md](docs/HISTORY.md). Contributions: [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
