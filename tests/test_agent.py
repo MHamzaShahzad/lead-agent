@@ -858,3 +858,12 @@ def test_queue_failed_send_keeps_error(client, monkeypatch):
     m = db.get_message(a)
     assert m["status"] == "failed" and m["error"] == "WAHA down"
     assert "Try again" in client.get("/").text
+
+
+def test_window_ending_2359_includes_last_minute(monkeypatch):
+    monkeypatch.setattr(config, "SEND_SCHEDULE", "")
+    monkeypatch.setattr(config, "SEND_START", "00:00")
+    monkeypatch.setattr(config, "SEND_END", "23:59")
+    assert whatsapp.hours_problem(datetime(2026, 11, 12, 23, 59, 30)) is None
+    monkeypatch.setattr(config, "SEND_END", "20:00")
+    assert whatsapp.hours_problem(datetime(2026, 11, 12, 20, 0, 0)) is not None

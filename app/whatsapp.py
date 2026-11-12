@@ -170,7 +170,7 @@ def hours_problem(now=None):
     windows = week_windows()
     w = windows[now.weekday()]
     hhmm = now.strftime("%H:%M")
-    if w and w[0] <= hhmm < w[1]:
+    if w and w[0] <= hhmm and (hhmm < w[1] or w[1] == "23:59"):   # 23:59 = until midnight (no 24:00 in HH:MM)
         return None
     day = DAYS[now.weekday()]
     why = f"{day} is a day off" if w is None else f"{day} hours are {w[0]}-{w[1]}"
