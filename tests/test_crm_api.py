@@ -130,3 +130,15 @@ def test_deliver_retries_never_raise(monkeypatch):
     monkeypatch.setattr(webhooks.httpx, "post", boom)
     assert webhooks._deliver("http://x.invalid", "s", b"{}", "lead.created", "id") is False
     assert len(n) == 3
+
+
+def test_queue_send_emits_message_sent(api, sent_events, monkeypatch):
+    from app import sendqueue, whatsapp
+    monkeypatch.setattr(config, "SEND_TYPING", False)
+    monkeypatch.setattr(whatsapp, "send_text", lambda phone, text: None)     # never a real send
+    lead = api.post("/api/v1/leads", headers=H, json={"name": "Sent Co", "phone": "0300-6666666"}).json()["lead"]
+    mid = db.add_message(lead["id"], "out", "hello", "outreach", "queued")
+    sent_events.clear()
+    assert sendqueue.deliver(db.get_message(mid), db.get_lead(lead["id"])) is True
+    ev = [json.loads(b) for _, b, e in sent_events if e == "message.sent"]
+    assert len(ev) == 1 and ev[0]["data"]["message"]["id"] == mid and ev[0]["data"]["lead"]["id"] == lead["id"]
