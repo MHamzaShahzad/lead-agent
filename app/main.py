@@ -245,7 +245,14 @@ def demo_simulate_reply(lead_id: int = Form(...), preset: str = Form(""), text: 
 async def waha_webhook(request: Request, tasks: BackgroundTasks, token: str = ""):
     if config.WEBHOOK_TOKEN and not hmac.compare_digest(token.encode(), config.WEBHOOK_TOKEN.encode()):
         return Response(status_code=403)
-    parsed = whatsapp.parse_webhook(await request.json())
+    raw = await request.body()
+    if not whatsapp.verify_hmac(raw, request.headers.get("x-webhook-hmac")):
+        return Response(status_code=403)
+    try:
+        payload = json.loads(raw)
+    except ValueError:
+        return Response(status_code=400)
+    parsed = whatsapp.parse_webhook(payload)
     if parsed:
         tasks.add_task(handle_inbound, *parsed)
     return {"ok": True}

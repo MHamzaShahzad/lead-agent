@@ -1,4 +1,6 @@
 """WhatsApp via WAHA (open-source WhatsApp HTTP API running in Docker)."""
+import hashlib
+import hmac
 import re
 from datetime import datetime, timedelta, timezone
 
@@ -225,6 +227,17 @@ def send_text(phone, text):
     if r.status_code >= 300:
         raise SendBlocked(f"WAHA error {r.status_code}: {r.text[:200]}")
     return r.json()
+
+
+def verify_hmac(raw, header):
+    """Check WAHA's X-Webhook-Hmac header (hex HMAC-SHA512 of the raw body). True when no key is configured."""
+    key = config.WAHA_WEBHOOK_HMAC_KEY
+    if not key:
+        return True
+    if not header:
+        return False
+    want = hmac.new(key.encode(), raw, hashlib.sha512).hexdigest()
+    return hmac.compare_digest(want.encode(), header.strip().lower().encode())
 
 
 def parse_webhook(payload):

@@ -36,6 +36,8 @@ services:
       WHATSAPP_DEFAULT_ENGINE: GOWS
       WHATSAPP_HOOK_URL: http://dashboard:8000/webhook/waha?token=${WEBHOOK_TOKEN:-}
       WHATSAPP_HOOK_EVENTS: message
+      # Optional: WAHA signs each webhook (X-Webhook-Hmac, SHA-512); the dashboard verifies it when the same key is set.
+      WHATSAPP_HOOK_HMAC_KEY: ${WAHA_WEBHOOK_HMAC_KEY:-}
     volumes:
       - waha_sessions:/app/.sessions
 

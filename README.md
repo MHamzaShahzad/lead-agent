@@ -180,7 +180,7 @@ Off until you set `SMTP_HOST` and `SMTP_FROM` (on `/setup` step 6 or in `.env`; 
 
 Most settings are in the dashboard's **Settings** tab and are saved to `.env`: app name and tagline, business
 description, daily limit, seconds between messages (min/max), follow-up days, per-weekday sending hours, opt-out line, AI model.
-Only in `.env`: `DASHBOARD_PASSWORD`, `WAHA_API_KEY`, `WEBHOOK_TOKEN`, `DEFAULT_COUNTRY_CODE`, `WAHA_IMAGE`,
+Only in `.env`: `DASHBOARD_PASSWORD`, `WAHA_API_KEY`, `WEBHOOK_TOKEN`, `WAHA_WEBHOOK_HMAC_KEY`, `DEFAULT_COUNTRY_CODE`, `WAHA_IMAGE`,
 `OLLAMA_URL`, `WAHA_URL`, `NTFY_TOPIC`, `GOOGLE_PLACES_API_KEY`, `API_KEY`, `CRM_WEBHOOK_URL`, `CRM_WEBHOOK_SECRET`,
 `WHATSAPP_PROVIDER` and the `WA_CLOUD_*` keys, `SEND_TYPING`, and the email keys `SMTP_*`, `IMAP_*`, `EMAIL_DAILY_LIMIT`. Every option is described in [.env.example](.env.example).
 
@@ -243,6 +243,10 @@ limits, AI tags, follow-ups and STOP handling work the same, and the WhatsApp ta
   use Tailscale or a VPN for remote access.
 - `/webhook/waha` must stay reachable without the dashboard login, so protect it with `WEBHOOK_TOKEN`
   (docker-compose.yml passes it to WAHA). WAHA's port 3000 is bound to localhost only.
+- **Signed webhooks (optional)**: set `WAHA_WEBHOOK_HMAC_KEY` in `.env` (`setup.py` generates one). The compose files pass
+  it to WAHA as `WHATSAPP_HOOK_HMAC_KEY`; WAHA then signs each webhook body (HMAC-SHA512, `X-Webhook-Hmac` header) and
+  `/webhook/waha` rejects a missing or wrong signature (constant-time compare). It works alongside `WEBHOOK_TOKEN`; both
+  must pass when both are set. Recreate the `waha` container after changing the key. Unset = no signature check.
 - Secrets are never written to logs or shown in the dashboard.
 
 ## Troubleshooting

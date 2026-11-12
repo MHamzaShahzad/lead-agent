@@ -52,6 +52,7 @@ def make_env():
         "DASHBOARD_PASSWORD": password,
         "WAHA_API_KEY": secrets.token_urlsafe(24),
         "WEBHOOK_TOKEN": secrets.token_urlsafe(24),
+        "WAHA_WEBHOOK_HMAC_KEY": secrets.token_urlsafe(32),
         "WAHA_IMAGE": "devlikeapro/waha:gows-arm" if arm else "devlikeapro/waha:gows",
         "MY_BUSINESS": " ".join(ask("What do you sell? One or two sentences",
                                     "We build modern websites and WhatsApp automation for small local businesses.").split()),

@@ -58,6 +58,8 @@ QUEUE_WORKER = os.getenv("QUEUE_WORKER", "1") == "1"       # background sender (
 DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASSWORD", "")   # empty = no login
 # Shared secret WAHA must send as ?token=... on the webhook URL (empty = webhook open; see docker-compose.yml).
 WEBHOOK_TOKEN = os.getenv("WEBHOOK_TOKEN", "").strip()
+# Optional: WAHA signs each webhook body (HMAC-SHA512, header X-Webhook-Hmac). Set the same key in WAHA (compose does it) to verify.
+WAHA_WEBHOOK_HMAC_KEY = os.getenv("WAHA_WEBHOOK_HMAC_KEY", "").strip()
 SEND_START = os.getenv("SEND_START", "09:00")          # local time window when messages may go out
 SEND_END = os.getenv("SEND_END", "20:00")
 # Per-weekday hours, Mon..Sun, e.g. "09:00-20:00,...,off". Empty = every day uses SEND_START-SEND_END.
