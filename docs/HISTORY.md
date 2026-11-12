@@ -71,3 +71,4 @@ Do the phases in order; run the tests and check desktop + mobile screenshots aft
 - Sending hours (default 09:00-20:00) and an opt-out line on first messages.
 - "Find email/phone on website", campaign tag per lead with reply rate per campaign.
 - Per-lead notes and dated reminders (shown in Today).
+- Optional official WhatsApp Cloud API provider (`WHATSAPP_PROVIDER=cloud`, `app/wa_cloud.py`): send text/template, `/webhook/cloud` (verify handshake, `X-Hub-Signature-256`), 24-hour-window handling with template fallback and UI note, Cloud status in the WhatsApp tab. WAHA remains the default; `whatsapp.send_text(phone, text)` is unchanged.

@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 import httpx
 
-from . import config, db
+from . import config, db, wa_cloud
 
 
 class SendBlocked(Exception):
@@ -29,7 +29,13 @@ def chat_id(phone):
     return f"{digits}@c.us"
 
 
+def is_cloud():
+    return config.WHATSAPP_PROVIDER == "cloud"
+
+
 def status():
+    if is_cloud():
+        return wa_cloud.info()[0]
     try:
         r = httpx.get(f"{config.WAHA_URL}/api/sessions/{config.WAHA_SESSION}", headers=_headers(), timeout=3)
         return r.json().get("status", f"HTTP {r.status_code}") if r.status_code < 500 else "error"
@@ -39,6 +45,8 @@ def status():
 
 def session_info():
     """Returns (status, linked_number or None)."""
+    if is_cloud():
+        return wa_cloud.info()
     try:
         r = httpx.get(f"{config.WAHA_URL}/api/sessions/{config.WAHA_SESSION}", headers=_headers(), timeout=3)
         if r.status_code == 404:
@@ -52,6 +60,8 @@ def session_info():
 
 
 def request_pairing_code(phone):
+    if is_cloud():
+        raise SendBlocked("Not needed with the official Cloud API: there is nothing to link.")
     """Get WhatsApp into 'waiting for login' state, then ask for an 8-character pairing code."""
     import time
     number = chat_id(phone).split("@")[0]
@@ -166,7 +176,19 @@ def check_limits(lead):
             raise SendBlocked(f"Slow down: wait {int(wait)}s between messages.")
 
 
+def window_note(phone):
+    """Cloud only: note when a draft to this number cannot go out as free text ('' otherwise)."""
+    return wa_cloud.window_note(phone) if is_cloud() else ""
+
+
 def send_text(phone, text):
+    """Send a message through the configured provider. On Cloud, a lead outside the 24h window gets the
+    approved first-contact template (text filled into {{1}})."""
+    if is_cloud():
+        try:
+            return wa_cloud.send(phone, text, chat_id)
+        except wa_cloud.CloudError as e:
+            raise SendBlocked(str(e)) from e
     r = httpx.post(f"{config.WAHA_URL}/api/sendText", headers=_headers(), timeout=30,
                    json={"session": config.WAHA_SESSION, "chatId": chat_id(phone), "text": text})
     if r.status_code >= 300:
