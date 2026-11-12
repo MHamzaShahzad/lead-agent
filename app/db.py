@@ -27,7 +27,7 @@ CREATE TABLE IF NOT EXISTS messages (
     direction TEXT NOT NULL,          -- in / out
     body TEXT NOT NULL,
     kind TEXT DEFAULT 'outreach',     -- outreach, reply, followup, inbound
-    status TEXT DEFAULT 'draft',      -- draft, approved, sent, rejected, failed, received
+    status TEXT DEFAULT 'draft',      -- draft, queued, sending, sent, rejected, cancelled, failed, received
     error TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP,
     sent_at TEXT
@@ -108,7 +108,8 @@ def init():
     with conn() as c:
         c.executescript(SCHEMA)
         c.execute("CREATE TABLE IF NOT EXISTS phone_alias (key TEXT PRIMARY KEY, lead_id INTEGER)")
-        _add_columns(c, "messages", {"tag": "TEXT", "next_step": "TEXT"})
+        c.execute("CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT)")
+        _add_columns(c, "messages", {"tag": "TEXT", "next_step": "TEXT", "scheduled_at": "TEXT"})
         _add_columns(c, "leads", {"campaign": "TEXT", "external_id": "TEXT", "updated_at": "TEXT"})
         c.execute("CREATE INDEX IF NOT EXISTS ix_external ON leads(external_id)")
         c.execute("UPDATE leads SET updated_at=COALESCE(updated_at, created_at) WHERE updated_at IS NULL")
@@ -271,9 +272,28 @@ def messages(status=None, lead_id=None):
         return [dict(r) for r in c.execute(q + " ORDER BY m.id DESC", args)]
 
 
-def sent_today():
+def sent_today(now=None):
+    """Messages sent on the UTC day of `now` (default: today)."""
+    day = (now or datetime.now(timezone.utc)).strftime("%Y-%m-%d")
     with conn() as c:
-        return c.execute("SELECT COUNT(*) FROM messages WHERE status='sent' AND sent_at >= date('now')").fetchone()[0]
+        return c.execute("SELECT COUNT(*) FROM messages WHERE status='sent' AND date(sent_at)=?", (day,)).fetchone()[0]
+
+
+def kv_get(key, default=None):
+    with conn() as c:
+        r = c.execute("SELECT value FROM kv WHERE key=?", (key,)).fetchone()
+        return r["value"] if r else default
+
+
+def kv_set(key, value):
+    with conn() as c:
+        c.execute("INSERT INTO kv (key, value) VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                  (key, str(value)))
+
+
+def queued():
+    """Queued messages, oldest first (the order they are sent in)."""
+    return sorted(messages(status="queued"), key=lambda m: m["id"])
 
 
 def last_sent_at():

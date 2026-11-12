@@ -43,6 +43,12 @@ BRAND_TAGLINE = os.getenv("BRAND_TAGLINE", "").strip()
 DEFAULT_COUNTRY_CODE = os.getenv("DEFAULT_COUNTRY_CODE", "").strip().lstrip("+")
 DAILY_SEND_LIMIT = int(os.getenv("DAILY_SEND_LIMIT", "15"))
 MIN_SECONDS_BETWEEN_SENDS = int(os.getenv("MIN_SECONDS_BETWEEN_SENDS", "45"))
+# Random pause between queued sends: a value between SEND_GAP_MIN and SEND_GAP_MAX seconds each time.
+# Unset = the fixed MIN_SECONDS_BETWEEN_SENDS above (so old setups behave as before).
+SEND_GAP_MIN = int(os.getenv("SEND_GAP_MIN") or MIN_SECONDS_BETWEEN_SENDS)
+SEND_GAP_MAX = max(SEND_GAP_MIN, int(os.getenv("SEND_GAP_MAX") or SEND_GAP_MIN))
+SEND_TYPING = os.getenv("SEND_TYPING", "1") == "1"         # show "typing..." for a moment before each send
+QUEUE_WORKER = os.getenv("QUEUE_WORKER", "1") == "1"       # background sender (turn off only for tests)
 DASHBOARD_PASSWORD = os.getenv("DASHBOARD_PASSWORD", "")   # empty = no login
 # Shared secret WAHA must send as ?token=... on the webhook URL (empty = webhook open; see docker-compose.yml).
 WEBHOOK_TOKEN = os.getenv("WEBHOOK_TOKEN", "").strip()
@@ -64,7 +70,7 @@ FOLLOWUP_DAYS = [int(x) for x in os.getenv("FOLLOWUP_DAYS", "3,7").split(",") if
 
 
 ENV_PATH = ROOT / ".env"
-SETTING_KEYS = ("BRAND_NAME", "BRAND_TAGLINE", "MY_BUSINESS", "OLLAMA_MODEL", "DAILY_SEND_LIMIT", "MIN_SECONDS_BETWEEN_SENDS", "FOLLOWUP_DAYS",
+SETTING_KEYS = ("BRAND_NAME", "BRAND_TAGLINE", "MY_BUSINESS", "OLLAMA_MODEL", "DAILY_SEND_LIMIT", "MIN_SECONDS_BETWEEN_SENDS", "SEND_GAP_MIN", "SEND_GAP_MAX", "FOLLOWUP_DAYS",
                 "SEND_START", "SEND_END", "SEND_SCHEDULE", "OPTOUT_ENABLED", "OPTOUT_LINE")
 
 
@@ -90,5 +96,5 @@ def save_settings(values):
     for k, v in values.items():
         os.environ[k] = v
         g[k] = ([int(x) for x in v.split(",") if x.strip()] if k == "FOLLOWUP_DAYS"
-                else int(v) if k in ("DAILY_SEND_LIMIT", "MIN_SECONDS_BETWEEN_SENDS")
+                else int(v) if k in ("DAILY_SEND_LIMIT", "MIN_SECONDS_BETWEEN_SENDS", "SEND_GAP_MIN", "SEND_GAP_MAX")
                 else (v == "1") if k == "OPTOUT_ENABLED" else v)

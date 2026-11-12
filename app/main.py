@@ -16,7 +16,7 @@ from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse,
 
 from urllib.parse import quote
 
-from . import ai, api, auth, config, db, finder, notify, ui, wa_cloud, webhooks, whatsapp
+from . import ai, api, auth, config, db, finder, notify, sendqueue, ui, wa_cloud, webhooks, whatsapp
 
 STOP_WORDS = re.compile(r"^\s*(stop|unsubscribe|band karo|mat bhejo|no thanks)\s*[.!]*\s*$", re.I)
 
@@ -31,12 +31,25 @@ async def _followup_loop():
         await asyncio.sleep(600)
 
 
+async def _queue_loop():
+    while True:
+        try:
+            r = await asyncio.to_thread(sendqueue.tick)
+        except Exception:
+            r = "error"                             # never let one bad tick stop the sender
+        await asyncio.sleep(2 if r == "sent" else 5)
+
+
 @asynccontextmanager
 async def lifespan(app):
     db.init()
-    task = asyncio.create_task(_followup_loop())
+    sendqueue.recover()
+    tasks = [asyncio.create_task(_followup_loop())]
+    if config.QUEUE_WORKER:
+        tasks.append(asyncio.create_task(_queue_loop()))
     yield
-    task.cancel()
+    for t in tasks:
+        t.cancel()
 
 
 app = FastAPI(title="Lead Gen Agent", lifespan=lifespan)
@@ -163,38 +176,6 @@ def run_followups():
     return made
 
 
-def _with_optout(lead, m, body):
-    """Add the opt-out line to the very first message we send a lead (never to replies or follow-ups)."""
-    line = config.OPTOUT_LINE.strip()
-    if (config.OPTOUT_ENABLED and line and m["kind"] == "outreach" and line.lower() not in body.lower()
-            and not any(x["direction"] == "out" and x["status"] == "sent" for x in db.messages(lead_id=lead["id"]))):
-        return f"{body}\n\n{line}"
-    return body
-
-
-def send_message(mid, body):
-    m = db.get_message(mid)
-    lead = db.get_lead(m["lead_id"])
-    body = re.sub(r"^\[fallback\]\s*", "", body.strip())
-    if not body:
-        raise whatsapp.SendBlocked("Message is empty.")
-    whatsapp.check_limits(lead)                  # refuse first, so a blocked draft stays a draft
-    body = _with_optout(lead, m, body)
-    db.update_message(mid, body=body, status="approved")
-    try:
-        whatsapp.send_text(lead["phone"], body)
-    except Exception as e:
-        db.update_message(mid, status="failed", error=str(e)[:300])
-        raise whatsapp.SendBlocked(str(e)) from e
-    db.update_message(mid, status="sent", sent_at=db.now(), error=None)
-    webhooks.emit("message.sent", {"lead": db.get_lead(lead["id"]),
-                                   "message": {"id": mid, "body": body, "kind": m["kind"]}})
-    if lead["status"] == "new":
-        db.update_lead(lead["id"], status="contacted")
-    if m["kind"] in ("outreach", "reply"):     # nudge later if they go quiet (any reply cancels it)
-        db.schedule_followups(lead["id"], config.FOLLOWUP_DAYS)
-
-
 # ---------------- routes ----------------
 @app.post("/webhook/waha")
 async def waha_webhook(request: Request, tasks: BackgroundTasks, token: str = ""):
@@ -282,13 +263,41 @@ def set_status(lead_id: int, status: str = Form(...), next: str = Form("/")):
     return back(f"Lead marked {status}.", next)
 
 
+def _eta_text(t):
+    loc = sendqueue.to_local(t)
+    return "~" + loc.strftime("%H:%M") + ("" if loc.date() == whatsapp._local_now().date() else loc.strftime(" on %a"))
+
+
 @app.post("/messages/{mid}/send")
 def approve_send(mid: int, body: str = Form(...), next: str = Form("/")):
     try:
-        send_message(mid, body)
+        t = sendqueue.enqueue(mid, body)
     except whatsapp.SendBlocked as e:
-        return back(f"Not sent: {e}", next)
-    return back("Sent on WhatsApp.", next)
+        return back(f"Not queued: {e}", next)
+    t = parse_eta(mid) or t
+    return back(f"Queued. It sends at {_eta_text(t)}" + (" (the queue is paused)." if sendqueue.paused() else "."), next)
+
+
+def parse_eta(mid):
+    return sendqueue.parse(db.get_message(mid)["scheduled_at"])
+
+
+@app.post("/messages/{mid}/cancel")
+def cancel_queued(mid: int, next: str = Form("/")):
+    return back("Taken out of the queue. It is a draft again." if sendqueue.cancel(mid) else "That message is no longer queued.", next)
+
+
+@app.post("/queue/pause")
+def queue_pause():
+    sendqueue.set_paused(True)
+    return back("Queue paused. Nothing is sent until you resume.")
+
+
+@app.post("/queue/resume")
+def queue_resume():
+    sendqueue.set_paused(False)
+    sendqueue.reschedule()
+    return back("Queue resumed.")
 
 
 def _redraft(m, lead):
@@ -323,47 +332,26 @@ def rewrite_draft(mid: int, mode: str = Form(...), body: str = Form("")):
     return back("Rewritten. Read it before sending.")
 
 
-BULK_LOCK = threading.Lock()
-
-
-def bulk_send(ids):
-    """Send approved drafts one by one, spaced out. Skips drafts with warnings; stops at the daily limit."""
-    if not BULK_LOCK.acquire(blocking=False):
-        return
-    try:
-        for mid in ids:
-            m = db.get_message(mid)
-            if not m or m["status"] != "draft" or ui.draft_warning(m["body"]):
-                continue
-            for _ in range(3):
-                try:
-                    send_message(mid, m["body"])
-                    break
-                except whatsapp.SendBlocked as e:
-                    txt = str(e)
-                    if txt.startswith(("Daily limit", "Outside sending hours")):
-                        return
-                    wait = re.match(r"Slow down: wait (\d+)s", txt)
-                    if not wait:
-                        break                       # failed or opted out: it stays in Approvals
-                    time.sleep(int(wait.group(1)) + 1)
-    finally:
-        BULK_LOCK.release()
-
-
 @app.post("/messages/bulk-send")
-def bulk_send_route(tasks: BackgroundTasks, ids: list[int] = Form([])):
+def bulk_send_route(ids: list[int] = Form([])):
     if not ids:
         return back("Tick at least one draft first.")
-    if BULK_LOCK.locked():
-        return back("Not started: a bulk send is already running. Wait for it to finish.")
-    problem = whatsapp.hours_problem()
-    if problem:
-        return back("Not started: " + problem)
-    left = max(0, config.DAILY_SEND_LIMIT - db.sent_today())
-    tasks.add_task(bulk_send, sorted(ids))
-    return back(f"Sending up to {min(len(ids), left)} messages about {config.MIN_SECONDS_BETWEEN_SENDS}s apart "
-                f"(daily limit leaves room for {left}). Drafts with warnings are skipped. Refresh to see progress.")
+    queued = skipped = 0
+    for mid in sorted(ids):
+        m = db.get_message(mid)
+        if not m or m["status"] != "draft" or ui.draft_warning(m["body"]):
+            skipped += 1
+            continue
+        try:
+            sendqueue.enqueue(mid, m["body"])
+            queued += 1
+        except whatsapp.SendBlocked:
+            skipped += 1
+    if not queued:
+        return back("Nothing queued: the selected drafts have warnings or are no longer waiting.")
+    last = max(parse_eta(m["id"]) for m in db.queued())
+    return back(f"Queued {queued} messages (last one at {_eta_text(last)}). They go out one by one inside your sending hours, "
+                f"up to the daily limit of {config.DAILY_SEND_LIMIT}." + (f" {skipped} skipped (warnings)." if skipped else ""))
 
 
 @app.post("/messages/{mid}/reject")
@@ -384,7 +372,7 @@ def relink(phone: str = Form(...)):
 
 @app.post("/settings")
 async def save_settings(request: Request, my_business: str = Form(""), ollama_model: str = Form(""),
-                        daily_limit: str = Form(""), min_seconds: str = Form(""), followup_days: str = Form(""),
+                        daily_limit: str = Form(""), min_seconds: str = Form(""), max_seconds: str = Form(""), followup_days: str = Form(""),
                         optout_on: str = Form(""), optout_line: str = Form(""),
                         brand_name: str = Form(None), brand_tagline: str = Form(None)):
     form = await request.form()
@@ -392,6 +380,7 @@ async def save_settings(request: Request, my_business: str = Form(""), ollama_mo
         biz = " ".join(my_business.split())
         model = ollama_model.strip()
         limit, gap = int(daily_limit), int(min_seconds)
+        gap_hi = int(max_seconds) if max_seconds.strip() else gap
         days = [int(x) for x in followup_days.replace(" ", "").split(",") if x]
     except ValueError:
         return back("Not saved: limits and follow-up days must be whole numbers (days like 3,7).")
@@ -399,8 +388,8 @@ async def save_settings(request: Request, my_business: str = Form(""), ollama_mo
         return back("Not saved: describe your business in 1 to 1500 characters.")
     if not model or " " in model:
         return back("Not saved: enter the Ollama model name, e.g. llama3.2:3b.")
-    if not 1 <= limit <= 500 or not 0 <= gap <= 3600:
-        return back("Not saved: daily limit must be 1-500 and the gap 0-3600 seconds.")
+    if not 1 <= limit <= 500 or not 0 <= gap <= gap_hi <= 3600:
+        return back("Not saved: daily limit must be 1-500 and the gap 0-3600 seconds (max not below min).")
     if len(days) > 6 or any(not 1 <= d <= 90 for d in days) or days != sorted(days):
         return back("Not saved: follow-up days must be up to 6 increasing numbers between 1 and 90, like 3,7.")
     line = " ".join(optout_line.split())
@@ -424,7 +413,7 @@ async def save_settings(request: Request, my_business: str = Form(""), ollama_mo
         brand["BRAND_TAGLINE"] = " ".join(brand_tagline.split())[:60]
     config.save_settings({**brand, "SEND_SCHEDULE": whatsapp.format_schedule(windows), "OPTOUT_ENABLED": "1" if optout_on else "0",
                           "OPTOUT_LINE": line or "Reply STOP to opt out", "MY_BUSINESS": biz, "OLLAMA_MODEL": model, "DAILY_SEND_LIMIT": limit,
-                          "MIN_SECONDS_BETWEEN_SENDS": gap, "FOLLOWUP_DAYS": ",".join(map(str, days))})
+                          "MIN_SECONDS_BETWEEN_SENDS": gap, "SEND_GAP_MIN": gap, "SEND_GAP_MAX": gap_hi, "FOLLOWUP_DAYS": ",".join(map(str, days))})
     return back("Settings saved. They apply right away.")
 
 
@@ -579,5 +568,5 @@ def dashboard():
     leads = db.list_leads()
     working = sum(1 for l in leads if l["score"] is None and l["created_at"] >= cutoff)
     return ui.page(results=db.results(), working=working, replies_week=db.replies_this_week(), msg=msg, ai_status=ai.status(), wa_status=wa_status, wa_number=wa_number, last_backup=db.last_backup(), campaigns=db.campaign_results(), reminders=db.due_reminders(),
-                   sent_today=db.sent_today(), leads=leads, drafts=drafts,
+                   sent_today=db.sent_today(), queued=db.queued(), paused=sendqueue.paused(), leads=leads, drafts=drafts,
                    inbox=db.replies_by_lead()[:30], followups=db.list_followups())

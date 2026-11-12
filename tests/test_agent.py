@@ -8,7 +8,7 @@ from datetime import datetime, timedelta, timezone
 import pytest
 from fastapi.testclient import TestClient
 
-from app import config, db, whatsapp
+from app import config, db, sendqueue, whatsapp
 
 CSV = """Business Name,Phone,Website,Category,City
 Karachi Smiles Dental,0300-1234567,,dentist,Karachi
@@ -24,6 +24,10 @@ def client(tmp_path, monkeypatch):
     if not os.getenv("REAL_OLLAMA"):
         monkeypatch.setattr(config, "OLLAMA_URL", "http://127.0.0.1:9")
     monkeypatch.setattr(config, "MIN_SECONDS_BETWEEN_SENDS", 0)
+    monkeypatch.setattr(config, "SEND_GAP_MIN", 0)
+    monkeypatch.setattr(config, "SEND_GAP_MAX", 0)
+    monkeypatch.setattr(config, "SEND_TYPING", False)
+    monkeypatch.setattr(config, "QUEUE_WORKER", False)         # tests drain the queue by hand
     monkeypatch.setattr(config, "BACKUP_DIR", str(tmp_path / "backups"))
     monkeypatch.setattr(config, "SEND_START", "00:00")          # tests run at any time of day
     monkeypatch.setattr(config, "SEND_END", "23:59")
@@ -36,9 +40,18 @@ def client(tmp_path, monkeypatch):
     monkeypatch.setattr(whatsapp, "send_text", lambda phone, text: sent.append((whatsapp.chat_id(phone), text)))
     monkeypatch.setattr(whatsapp, "status", lambda: "WORKING")
     monkeypatch.setattr(whatsapp, "session_info", lambda: ("WORKING", "971500000000"))
+    from app import sendqueue
     from app.main import app
     with TestClient(app) as c:
         c.sent = sent
+        orig = c.post
+
+        def post(url, *a, **k):
+            r = orig(url, *a, **k)
+            if url.endswith("/send") or url == "/messages/bulk-send":
+                sendqueue.drain()                      # the worker would do this in the background
+            return r
+        c.post = post
         yield c
 
 
@@ -347,7 +360,7 @@ def test_phase6_results_and_bulk_send(client):
     before = len(client.sent)
     ids = [d["id"] for d in drafts[:3]]
     r = client.post("/messages/bulk-send", data={"ids": ids})
-    assert "Sending up to" in r.text
+    assert "Queued 2 messages" in r.text
     assert len(client.sent) == before + 2
     assert db.get_message(drafts[0]["id"])["status"] == "draft"
     assert {db.get_message(i)["status"] for i in ids[1:]} == {"sent"}
@@ -362,7 +375,7 @@ def test_phase6_bulk_send_stops_at_daily_limit_and_keeps_drafts(client, monkeypa
     monkeypatch.setattr(config, "DAILY_SEND_LIMIT", 1)
     client.post("/messages/bulk-send", data={"ids": [d["id"] for d in drafts]})
     assert len(client.sent) == 1
-    assert len(db.messages(status="draft")) == len(drafts) - 1     # blocked ones stay drafts, not lost
+    assert len(db.queued()) == len(drafts) - 1                     # over the limit: they wait in the queue, not lost
 
 
 def test_new_inbound_supersedes_old_reply_drafts(client):
@@ -447,12 +460,10 @@ def test_sending_hours_block_send_and_bulk(client, monkeypatch):
     monkeypatch.setattr(config, "SEND_END", "20:00")
     monkeypatch.setattr(whatsapp, "_local_now", lambda: dt(2026, 11, 12, 22, 30))
     r = client.post(f"/messages/{mid}/send", data={"body": "hi"})
-    assert client.sent == [] and db.get_message(mid)["status"] == "draft"
-    assert "Outside sending hours" in r.text
-    r = client.post("/messages/bulk-send", data={"ids": [mid]})
-    assert client.sent == [] and "outside sending hours" in r.text.lower()
+    assert client.sent == [] and db.get_message(mid)["status"] == "queued"      # waits for the window
+    assert "Queued" in r.text
     monkeypatch.setattr(whatsapp, "_local_now", lambda: dt(2026, 11, 12, 10, 0))
-    client.post(f"/messages/{mid}/send", data={"body": "hi"})
+    sendqueue.drain()
     assert len(client.sent) == 1
 
 
@@ -517,11 +528,9 @@ def test_day_off_blocks_send(client, monkeypatch):
     monkeypatch.setattr(config, "SEND_SCHEDULE", ",".join(["00:00-23:59"] * 6 + ["off"]))
     monkeypatch.setattr(whatsapp, "_local_now", lambda: dt(2026, 11, 15, 12, 0))
     r = client.post(f"/messages/{mid}/send", data={"body": "hi"})
-    assert client.sent == [] and "Sun is a day off" in r.text
-    r = client.post("/messages/bulk-send", data={"ids": [mid]})
-    assert client.sent == [] and "day off" in r.text
+    assert client.sent == [] and db.get_message(mid)["status"] == "queued"
     monkeypatch.setattr(whatsapp, "_local_now", lambda: dt(2026, 11, 16, 12, 0))
-    client.post(f"/messages/{mid}/send", data={"body": "hi"})
+    sendqueue.drain()
     assert len(client.sent) == 1
 
 
@@ -717,3 +726,135 @@ def test_google_option_in_ui(client, monkeypatch):
     assert 'value="google"' not in client.get("/").text
     monkeypatch.setattr(config, "GOOGLE_PLACES_API_KEY", "k")
     assert 'value="google"' in client.get("/").text
+
+
+# ---------------- sending queue ----------------
+def _queue_lead(client, n, phone=None):
+    client.post("/leads", data={"name": f"Q{n}", "phone": phone or f"03009990{n:03d}"})
+    d = [m for m in db.messages(status="draft") if m["lead_name"] == f"Q{n}"][0]
+    return d["id"], d["lead_id"]
+
+
+class Clock:
+    """Mocked UTC clock; local time = UTC (so hours tests are simple)."""
+    def __init__(self, monkeypatch, start):
+        self.t = start
+        monkeypatch.setattr(sendqueue, "clock", lambda: self.t)
+        monkeypatch.setattr(whatsapp, "_local_now", lambda: self.t.replace(tzinfo=None))
+
+    def at(self, *a):
+        self.t = datetime(*a, tzinfo=timezone.utc)
+
+
+def _enqueue(client, mid):
+    sendqueue.enqueue(mid, "hello there")
+
+
+def test_queue_waits_for_window_then_sends(client, monkeypatch):
+    monkeypatch.setattr(config, "SEND_SCHEDULE", "")
+    monkeypatch.setattr(config, "SEND_START", "09:00")
+    monkeypatch.setattr(config, "SEND_END", "20:00")
+    clk = Clock(monkeypatch, datetime(2026, 11, 12, 22, 0, tzinfo=timezone.utc))
+    mid, _ = _queue_lead(client, 1)
+    _enqueue(client, mid)
+    m = db.get_message(mid)
+    assert m["status"] == "queued" and m["scheduled_at"] == "2026-11-13 09:00:00"     # next window
+    assert sendqueue.tick() == "waiting" and client.sent == []
+    clk.at(2026, 11, 13, 9, 1)
+    assert sendqueue.tick() == "sent" and len(client.sent) == 1
+    assert db.get_message(mid)["status"] == "sent"
+    assert sendqueue.tick() == "idle"
+
+
+def test_queue_daily_limit_rolls_over(client, monkeypatch):
+    monkeypatch.setattr(config, "DAILY_SEND_LIMIT", 1)
+    clk = Clock(monkeypatch, datetime(2026, 11, 12, 10, 0, tzinfo=timezone.utc))
+    a, _ = _queue_lead(client, 2)
+    b, _ = _queue_lead(client, 3)
+    _enqueue(client, a)
+    _enqueue(client, b)
+    assert sendqueue.tick() == "sent"
+    assert sendqueue.tick() == "waiting" and len(client.sent) == 1
+    assert db.get_message(b)["scheduled_at"] >= "2026-11-13 00:00:00"      # shown as tomorrow
+    clk.at(2026, 11, 12, 23, 59)
+    assert sendqueue.tick() == "waiting"
+    clk.at(2026, 11, 13, 0, 1)
+    assert sendqueue.tick() == "sent" and len(client.sent) == 2
+
+
+def test_queue_random_gap_bounds(client, monkeypatch):
+    monkeypatch.setattr(config, "SEND_GAP_MIN", 30)
+    monkeypatch.setattr(config, "SEND_GAP_MAX", 90)
+    gaps = {sendqueue.pick_gap() for _ in range(300)}
+    assert min(gaps) >= 30 and max(gaps) <= 90 and len(gaps) > 5
+    monkeypatch.setattr(config, "SEND_GAP_MAX", 10)           # max below min never goes under min
+    assert sendqueue.pick_gap() == 30
+    monkeypatch.setattr(config, "SEND_GAP_MAX", 90)
+    clk = Clock(monkeypatch, datetime(2026, 11, 12, 10, 0, tzinfo=timezone.utc))
+    a, _ = _queue_lead(client, 4)
+    b, _ = _queue_lead(client, 5)
+    _enqueue(client, a)
+    _enqueue(client, b)
+    monkeypatch.setattr(sendqueue, "pick_gap", lambda: 60)
+    with db.conn() as c:
+        c.execute("DELETE FROM kv")
+    assert sendqueue.tick() == "sent"
+    db.update_message(a, sent_at=clk.t.strftime("%Y-%m-%d %H:%M:%S"))
+    clk.t += timedelta(seconds=59)
+    assert sendqueue.tick() == "waiting" and len(client.sent) == 1
+    clk.t += timedelta(seconds=2)
+    assert sendqueue.tick() == "sent" and len(client.sent) == 2
+
+
+def test_queue_skips_opted_out_and_replied(client, monkeypatch):
+    Clock(monkeypatch, datetime(2026, 11, 12, 10, 0, tzinfo=timezone.utc))
+    a, la = _queue_lead(client, 6)
+    b, lb = _queue_lead(client, 7)
+    c_, lc = _queue_lead(client, 8)
+    for m in (a, b, c_):
+        _enqueue(client, m)
+    db.update_lead(la, status="opted_out")
+    db.add_message(lb, "in", "actually, not now", "inbound", "received")
+    assert sendqueue.drain() == 1 and len(client.sent) == 1
+    assert db.get_message(a)["status"] == "cancelled" and "opted out" in db.get_message(a)["error"]
+    assert db.get_message(b)["status"] == "cancelled" and "replied" in db.get_message(b)["error"]
+    assert db.get_message(c_)["status"] == "sent"
+
+
+def test_queue_restart_picks_up_and_pause_cancel(client, monkeypatch):
+    Clock(monkeypatch, datetime(2026, 11, 12, 10, 0, tzinfo=timezone.utc))
+    a, _ = _queue_lead(client, 9)
+    b, _ = _queue_lead(client, 10)
+    r = client.post(f"/messages/{a}/send", data={"body": "hi a"})
+    assert "Queued" in r.text and len(client.sent) == 1          # test wrapper drained it
+    db.update_message(b, status="sending")                        # crash mid-send is never resent
+    sendqueue.recover()
+    assert db.get_message(b)["status"] == "failed"
+    db.update_message(b, status="draft")
+    sendqueue.enqueue(b, "hi b")
+    client.post("/queue/pause")
+    assert sendqueue.tick() == "paused" and len(client.sent) == 1
+    assert "Resume queue" in client.get("/").text and "Queue" in client.get("/").text
+    # "restart": the queue lives in SQLite, a fresh start still sees it and resumes
+    with TestClient(__import__("app.main", fromlist=["app"]).app):
+        assert [m["id"] for m in db.queued()] == [b]
+        client.post("/queue/resume")
+        assert sendqueue.tick() == "sent" and len(client.sent) == 2
+    c_, _ = _queue_lead(client, 11)
+    sendqueue.enqueue(c_, "x")
+    assert "Cancel" in client.get("/").text
+    client.post(f"/messages/{c_}/cancel")
+    assert db.get_message(c_)["status"] == "draft" and db.queued() == []
+
+
+def test_queue_failed_send_keeps_error(client, monkeypatch):
+    Clock(monkeypatch, datetime(2026, 11, 12, 10, 0, tzinfo=timezone.utc))
+    a, _ = _queue_lead(client, 12)
+    def boom(phone, text):
+        raise whatsapp.SendBlocked("WAHA down")
+    monkeypatch.setattr(whatsapp, "send_text", boom)
+    _enqueue(client, a)
+    assert sendqueue.tick() == "failed"
+    m = db.get_message(a)
+    assert m["status"] == "failed" and m["error"] == "WAHA down"
+    assert "Try again" in client.get("/").text

@@ -50,6 +50,16 @@ def dshort(d):
     return f"{txt} · today" if delta == 0 else f"{txt} · overdue" if delta < 0 else txt
 
 
+def eta(ts):
+    """'~14:05' (or '~14:05 Mon' on another day) from a stored UTC time."""
+    from . import sendqueue
+    try:
+        loc = sendqueue.to_local(sendqueue.parse(ts))
+    except (TypeError, ValueError):
+        return "soon"
+    return "~" + loc.strftime("%H:%M") + ("" if loc.date() == whatsapp._local_now().date() else loc.strftime(" %a"))
+
+
 def t(ts):
     """Relative time; the browser adds the exact local time as a tooltip (stored times are UTC)."""
     if not ts:
@@ -144,7 +154,7 @@ def week_hours():
             + "".join(rows) + "</div>")
 
 
-def page(*, results=None, working=0, replies_week=0, msg, ai_status, wa_status, wa_number, last_backup=None, campaigns=(), reminders=(), sent_today, leads, drafts, inbox, followups):
+def page(*, results=None, working=0, replies_week=0, msg, ai_status, wa_status, wa_number, last_backup=None, campaigns=(), reminders=(), sent_today, leads, drafts, inbox, followups, queued=(), paused=False):
     ai_ok = ai_status["up"] and ai_status["model_ready"]
     wa_ok = wa_status == "WORKING"
     limit = config.DAILY_SEND_LIMIT
@@ -178,6 +188,13 @@ def page(*, results=None, working=0, replies_week=0, msg, ai_status, wa_status, 
       <div class="kpi"><span class="k">Replies this week</span><b>{replies_week}</b><small>from leads</small></div>
       <div class="kpi"><span class="k" title="Of the leads we messaged, how many wrote back">Reply rate</span><b>{rate}</b><small>{res['replied']} of {res['messaged']} replied</small></div>
     </div>"""
+    q_rows = "".join(
+        f"""<div class="frow"><span class="lt"><b>{e(q['lead_name'])}</b><span class="sub">Queued, sends at {eta(q['scheduled_at'])} · {e(q['body'][:60])}</span></span>
+        <form method="post" action="/messages/{q['id']}/cancel"><button class="secondary small" aria-label="Cancel queued message to {e(q['lead_name'])}">Cancel</button></form></div>"""
+        for q in queued)
+    queue_html = (f"""<div class="sh2"><h3>Queue <span class="cnt">{len(queued)}</span></h3></div>
+      <div class="card flush clist">{q_rows or '<div class="frow"><span class="sub">Nothing queued.</span></div>'}</div>
+      {'<p class="sub">The queue is paused. Resume it in Settings.</p>' if paused else ''}""") if (queued or paused) else ""
     insights = f"""<div class="sh2"><h3>Results</h3></div>
     {camp_card}
     <div class="card pipe"><div class="ph"><h3>Leads by stage</h3><span class="sub">{len(leads)} total · {res['won']} won</span></div>
@@ -330,7 +347,7 @@ def page(*, results=None, working=0, replies_week=0, msg, ai_status, wa_status, 
         <p class="sub">{f'{"Business number" if cloud else "Linked number"}: +{e(wa_number)}' if wa_number else 'Status: ' + e(wa_status)}</p></div></div>
       <div class="card"><div class="ph"><h3>Sent today</h3><b>{sent_today} <span class="sub">of {limit}</span></b></div>
         <div class="meter big"><i style="width:{pct}%"></i></div>
-        <p class="sub">The limit protects your number from being banned. At least {config.MIN_SECONDS_BETWEEN_SENDS}s between messages. Sending hours: {e(whatsapp.schedule_summary())}.</p></div>
+        <p class="sub">The limit protects your number from being banned. {config.SEND_GAP_MIN}-{config.SEND_GAP_MAX}s between messages. Sending hours: {e(whatsapp.schedule_summary())}.</p></div>
       <div class="card"><h3>Backup</h3>
         <p class="sub">{('Last automatic backup: ' + last_backup.strftime('%d %b %Y, %H:%M') + '.') if last_backup else 'No backup yet. The first one is made within 10 minutes of the app running.'}
         A copy of your leads is saved once a day in the <code>backups</code> folder (the last 14 are kept).</p></div>
@@ -338,6 +355,9 @@ def page(*, results=None, working=0, replies_week=0, msg, ai_status, wa_status, 
 
     # ---------- Settings ----------
     settings_html = f"""
+      <div class="card"><h3>Sending queue</h3>
+        <p class="sub">{len(queued)} queued. {'Paused: nothing is sent.' if paused else 'Running: sends one message at a time inside your sending hours.'}</p>
+        <form method="post" action="/queue/{'resume' if paused else 'pause'}"><button class="{'primary' if paused else 'secondary'}">{'Resume queue' if paused else 'Pause queue'}</button></form></div>
       <form method="post" action="/settings">
         <div class="card"><h3>Branding</h3>
           <p class="sub">Shown in the header and browser tab. Only you see it.</p>
@@ -349,12 +369,14 @@ def page(*, results=None, working=0, replies_week=0, msg, ai_status, wa_status, 
         <div class="card"><h3>Sending limits</h3>
           <p class="sub">These protect your WhatsApp number from being banned. Keep them low.</p>
           <div class="two"><div><label class="lbl">Messages per day (max)</label><input name="daily_limit" type="number" min="1" max="500" value="{limit}" required></div>
-          <div><label class="lbl">Seconds between messages (min)</label><input name="min_seconds" type="number" min="0" max="3600" value="{config.MIN_SECONDS_BETWEEN_SENDS}" required></div></div>
+          <div><label class="lbl">Seconds between messages (min)</label><input name="min_seconds" type="number" min="0" max="3600" value="{config.SEND_GAP_MIN}" required></div></div>
+          <label class="lbl">Seconds between messages (max)</label><input name="max_seconds" type="number" min="0" max="3600" value="{config.SEND_GAP_MAX}" required>
+          <p class="sub">Each gap is a random number between min and max, so sending looks less robotic.</p>
           <label class="lbl">Follow-up reminders after how many days?</label>
           <input name="followup_days" value="{e(','.join(map(str, config.FOLLOWUP_DAYS)))}" placeholder="3,7">
           <p class="sub">Separate with commas: 3,7 means a reminder on day 3 and day 7. Leave empty for none. Applies to leads you message from now on.</p></div>
         <div class="card"><h3>Sending hours</h3>
-          <p class="sub">Messages only go out on the days ticked, between that day's times (your local time). Outside them, Send says so and the draft waits.</p>
+          <p class="sub">Messages only go out on the days ticked, between that day's times (your local time). Outside them, queued messages wait for the next window.</p>
           {week_hours()}</div>
         <div class="card"><h3>Opt-out line</h3>
           <label class="chk"><input type="checkbox" name="optout_on" value="1" {'checked' if config.OPTOUT_ENABLED else ''}> Add this line to the <b>first</b> message to each lead</label>
@@ -442,7 +464,7 @@ def page(*, results=None, working=0, replies_week=0, msg, ai_status, wa_status, 
 <section id="approvals"><div class="sh"><p class="sub" id="hello">Today</p><h2>Today</h2></div>{overview}{rem_html}
   <div class="sh2" id="todo"><h3>Messages to check {cnt(n_drafts, True)}</h3>
   <p class="sub">The AI wrote these. <b>Nothing is sent until you press Send.</b> <span class="kbd">Keys: <kbd>j</kbd>/<kbd>k</kbd> move, <kbd>⌘</kbd>+<kbd>Enter</kbd> sends, <kbd>Esc</kbd> leaves the box.</span></p></div>
-  {bulk_bar}{approvals}{insights}</section>
+  {queue_html}{bulk_bar}{approvals}{insights}</section>
 <section id="replies">{sh('Chats', 'The latest message from each lead. Tap one to open the whole conversation.')}{replies}</section>
 <section id="leads">{sh('Leads', f'{len(leads)} businesses')}{leads_html}</section>
 <section id="add">{sh('Add leads', 'Three ways to bring in new businesses.')}{add_html}</section>
@@ -478,11 +500,12 @@ def lead_page(lead, *, msg, convo, followups, notes=(), reminders=(), came_from=
     bkey = came_from if came_from in BACK_TO else "leads"
     bsec, blabel = BACK_TO[bkey]
     nxt = f'<input type="hidden" name="next" value="/leads/{i}">'
-    ST = {"draft": "Draft, waiting for approval", "approved": "Sending", "sent": "Sent", "rejected": "Discarded",
+    ST = {"draft": "Draft, waiting for approval", "approved": "Sending", "sending": "Sending", "queued": "", "cancelled": "Cancelled", "sent": "Sent", "rejected": "Discarded",
           "failed": "Failed", "received": ""}
     bubbles = "".join(f"""
       <div class="bub {'in' if m['direction'] == 'in' else 'out'} {e(m['status'])}">
-        <div>{e(m['body'])}</div><div class="meta">{t(m['sent_at'] or m['created_at'])}{(' · ' + e(ST.get(m['status'], m['status']))) if ST.get(m['status'], m['status']) else ''}</div>
+        <div>{e(m['body'])}</div><div class="meta">{t(m['sent_at'] or m['created_at'])}{(' · ' + e(ST.get(m['status'], m['status']))) if ST.get(m['status'], m['status']) else ''}{(' · Queued, sends at ' + eta(m['scheduled_at'])) if m['status'] == 'queued' else ''}</div>
+        {f'<form method="post" action="/messages/{m["id"]}/cancel">{nxt}<button class="ghost small">Cancel</button></form>' if m['status'] == 'queued' else ''}
         {f'<div class="meta err">{e(m["error"])}</div>' if m.get('error') else ''}
         {f'<div class="meta">{reply_tag(m.get("tag"))} Next step: {e(m["next_step"])}</div>' if m.get('tag') else ''}
       </div>""" for m in convo)
