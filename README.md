@@ -40,6 +40,25 @@ Connects to your CRM through a REST API and webhooks.
 - Lead page with chat, notes and reminders, campaign tags, "find email/phone on website", CSV export, reply-rate stats.
 - Daily backup of `leads.db` to `backups/` (last 14). Optional phone push on replies via [ntfy](https://ntfy.sh).
 
+## How it compares
+
+There are other good open-source outreach tools. This is how Lead Agent differs, based on each project's public README
+(November 2026; corrections welcome).
+
+| Tool | Channels | AI | Lead source | Notes |
+|---|---|---|---|---|
+| **Lead Agent** | WhatsApp (WAHA or official Cloud API) | Local (Ollama), free | OpenStreetMap, Google Places API, CSV | Approval before every send, sending queue, reply tags, follow-ups, REST API + webhooks, SQLite |
+| [Prospex](https://github.com/asiifdev/business-leads-ai-automation) | WhatsApp (Baileys) | Drafts and scoring | Google Maps scraping | Approval, caps, quiet hours, random gaps; self-host or hosted |
+| [AgentSDR](https://github.com/Kandid-ai/AgentSDR) | Email, LinkedIn, WhatsApp (via Unipile) | Your own AI key | Enrichment tables | Full AI CRM with reply drafts; needs PostgreSQL |
+| [openoutbound](https://github.com/xyluxx/openoutbound) | Email, LinkedIn | Cloud or Ollama | Buying signals | AI SDR engine with MCP, CLI and REST API |
+| [OpenOutreach](https://github.com/eracle/OpenOutreach) | Email | Cloud AI | Finds people for your product | B2B, sends from your mailbox |
+| [Google Maps scrapers](https://github.com/topics/google-maps-scraper) | None | None | Google Maps | Export a CSV; no messages or replies |
+
+**Pick Lead Agent if** you sell to local businesses that answer WhatsApp more than email, want the AI and your data to
+stay on your own machine at no cost, and want the whole loop in one small app: find, write, approve, send, handle
+replies, follow up, and sync to your CRM. **Look elsewhere if** you mainly need email or LinkedIn sequences, a team CRM,
+or large-volume sending.
+
 ## Setup (about 15 minutes)
 
 You need a computer that stays on while you use it (Mac, Linux or Windows 10/11, 8 GB RAM) and a phone with
