@@ -6,6 +6,8 @@ from urllib.parse import urljoin, urlparse
 
 import httpx
 
+from . import config
+
 OVERPASS = "https://overpass-api.de/api/interpreter"
 OVERPASS_MIRRORS = (OVERPASS, "https://overpass.kumi.systems/api/interpreter")
 
@@ -58,6 +60,59 @@ def find_osm(niche, city, limit=50):
             "notes": t.get("addr:street"),
         })
     return leads
+
+
+PLACES_URL = "https://places.googleapis.com/v1/places:searchText"
+PLACES_FIELDS = ("places.displayName,places.nationalPhoneNumber,places.internationalPhoneNumber,"
+                 "places.websiteUri,places.formattedAddress,places.rating,places.types,nextPageToken")
+PLACES_MAX = 60                                   # 3 pages of 20: keeps API cost low
+
+
+class PlacesError(Exception):
+    pass
+
+
+def find_google(niche, city, limit=PLACES_MAX):
+    """Official Google Places API (New) Text Search. Needs GOOGLE_PLACES_API_KEY. No page scraping."""
+    key = config.GOOGLE_PLACES_API_KEY
+    if not key:
+        raise PlacesError("Google Places is not set up. Add GOOGLE_PLACES_API_KEY to .env.")
+    limit = min(int(limit), PLACES_MAX)
+    headers = {"X-Goog-Api-Key": key, "X-Goog-FieldMask": PLACES_FIELDS, "Content-Type": "application/json"}
+    body = {"textQuery": f"{niche.strip()} in {city.strip()}", "pageSize": min(20, limit)}
+    leads = []
+    while len(leads) < limit:
+        try:
+            r = httpx.post(PLACES_URL, json=body, headers=headers, timeout=30)
+        except httpx.HTTPError:
+            raise PlacesError("Could not reach Google Places. Check your internet connection.") from None
+        if r.status_code != 200:
+            if r.status_code in (400, 401, 403):
+                msg = "Google Places key was rejected or the API is not enabled for it. Check GOOGLE_PLACES_API_KEY."
+            elif r.status_code == 429:
+                msg = "Google Places quota exceeded. Try again later or check your billing quota."
+            else:
+                msg = f"Google Places error {r.status_code}."
+            raise PlacesError(msg)
+        data = r.json()
+        for p in data.get("places", []):
+            name = (p.get("displayName") or {}).get("text")
+            if not name:
+                continue
+            types = [t.replace("_", " ") for t in (p.get("types") or []) if t not in ("point_of_interest", "establishment")]
+            notes = " | ".join(x for x in (p.get("formattedAddress"),
+                                           f"Google rating {p['rating']}" if p.get("rating") else None) if x)
+            leads.append({
+                "name": name, "niche": niche, "city": city, "source": "google_places",
+                "website": p.get("websiteUri"),
+                "phone": p.get("internationalPhoneNumber") or p.get("nationalPhoneNumber"),
+                "email": None, "notes": notes or (types[0] if types else None),
+            })
+        token = data.get("nextPageToken")
+        if not token:
+            break
+        body["pageToken"] = token
+    return leads[:limit]
 
 
 def parse_csv(text):

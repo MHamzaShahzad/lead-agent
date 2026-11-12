@@ -664,3 +664,56 @@ def test_webhook_token(client, monkeypatch):
     assert client.post("/webhook/waha", json=msg).status_code == 403
     assert client.post("/webhook/waha?token=wrong", json=msg).status_code == 403
     assert client.post("/webhook/waha?token=s3cret", json=msg).status_code == 200
+
+
+# ---------------- Google Places source ----------------
+def _place(n):
+    return {"displayName": {"text": f"Biz {n}"}, "internationalPhoneNumber": f"+92 300 000{n:04d}",
+            "websiteUri": f"https://biz{n}.pk", "formattedAddress": "Main St", "rating": 4.5, "types": ["dentist"]}
+
+
+def test_google_mapping_and_pagination(monkeypatch):
+    from app import finder
+    monkeypatch.setattr(config, "GOOGLE_PLACES_API_KEY", "k")
+    calls = []
+
+    class R:
+        status_code = 200
+        def __init__(self, d): self.d = d
+        def json(self): return self.d
+
+    def fake_post(url, json, headers, timeout):
+        calls.append(dict(json))
+        assert headers["X-Goog-Api-Key"] == "k" and "places.websiteUri" in headers["X-Goog-FieldMask"]
+        if "pageToken" not in json:
+            return R({"places": [_place(i) for i in range(20)], "nextPageToken": "t"})
+        return R({"places": [_place(i) for i in range(20, 25)]})
+
+    monkeypatch.setattr(finder.httpx, "post", fake_post)
+    leads = finder.find_google("dentist", "Lahore")
+    assert len(leads) == 25 and len(calls) == 2 and calls[1]["pageToken"] == "t"
+    assert leads[0]["source"] == "google_places" and leads[0]["website"] == "https://biz0.pk"
+    assert leads[0]["phone"].startswith("+92") and "4.5" in leads[0]["notes"]
+
+
+def test_google_errors_and_disabled(monkeypatch):
+    from app import finder
+    monkeypatch.setattr(config, "GOOGLE_PLACES_API_KEY", "")
+    with pytest.raises(finder.PlacesError):
+        finder.find_google("dentist", "Lahore")
+    monkeypatch.setattr(config, "GOOGLE_PLACES_API_KEY", "secret-key")
+
+    class R:
+        status_code = 429
+        def json(self): return {}
+
+    monkeypatch.setattr(finder.httpx, "post", lambda *a, **k: R())
+    with pytest.raises(finder.PlacesError, match="quota") as e:
+        finder.find_google("dentist", "Lahore")
+    assert "secret-key" not in str(e.value)
+
+
+def test_google_option_in_ui(client, monkeypatch):
+    assert 'value="google"' not in client.get("/").text
+    monkeypatch.setattr(config, "GOOGLE_PLACES_API_KEY", "k")
+    assert 'value="google"' in client.get("/").text

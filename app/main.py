@@ -205,12 +205,13 @@ async def import_csv(tasks: BackgroundTasks, file: UploadFile):
 
 
 @app.post("/find")
-def find(tasks: BackgroundTasks, niche: str = Form(...), city: str = Form(...)):
+def find(tasks: BackgroundTasks, niche: str = Form(...), city: str = Form(...), source: str = Form("osm")):
+    google = source == "google"
     try:
-        rows = finder.find_osm(niche, city)
+        rows = finder.find_google(niche, city) if google else finder.find_osm(niche, city)
     except Exception as e:
         return back(f"Search failed: {e}")
-    return back(f"Found {len(rows)} on OpenStreetMap. " + import_leads(rows, tasks))
+    return back(f"Found {len(rows)} on {'Google Places' if google else 'OpenStreetMap'}. " + import_leads(rows, tasks))
 
 
 @app.post("/leads/{lead_id}/rescore")

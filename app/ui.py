@@ -370,6 +370,7 @@ def page(*, results=None, working=0, replies_week=0, msg, ai_status, wa_status, 
           <div class="qp" aria-label="Quick picks">{''.join(f'<button type="button" class="chip" data-fill="{n}">{n}</button>' for n in ('school', 'clinic', 'gym', 'restaurant', 'real estate'))}</div>
           <datalist id="niches"><option>school<option>college<option>software house<option>clinic<option>gym<option>restaurant<option>real estate<option>hotel</datalist>
           <label class="lbl">City</label><input name="city" placeholder="e.g. Lahore, Dubai" required>
+          {'<label class="lbl">Source</label><select name="source"><option value="osm">OpenStreetMap (free)</option><option value="google">Google Places</option></select>' if config.GOOGLE_PLACES_API_KEY else ''}
           <button class="primary block">Search</button></form>
         <form class="card addc" method="post" action="/import" enctype="multipart/form-data"><div class="ib">{ic('file', 22)}</div><h3>Import a list</h3>
           <p class="sub">A CSV file with columns: name, phone, website, niche, city, email. Duplicates are merged automatically.</p>

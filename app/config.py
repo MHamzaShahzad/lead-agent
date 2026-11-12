@@ -46,6 +46,7 @@ OPTOUT_ENABLED = os.getenv("OPTOUT_ENABLED", "1") == "1"   # add the opt-out lin
 OPTOUT_LINE = os.getenv("OPTOUT_LINE", "Reply STOP to opt out")
 BACKUP_DIR = os.getenv("BACKUP_DIR", str(ROOT / "backups"))
 BACKUPS_KEEP = 14
+GOOGLE_PLACES_API_KEY = os.getenv("GOOGLE_PLACES_API_KEY", "").strip()   # empty = Google source hidden
 NTFY_TOPIC = os.getenv("NTFY_TOPIC", "").strip()           # empty = no push alerts
 FOLLOWUP_DAYS = [int(x) for x in os.getenv("FOLLOWUP_DAYS", "3,7").split(",") if x.strip()]
 

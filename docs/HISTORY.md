@@ -71,3 +71,4 @@ Do the phases in order; run the tests and check desktop + mobile screenshots aft
 - Sending hours (default 09:00-20:00) and an opt-out line on first messages.
 - "Find email/phone on website", campaign tag per lead with reply rate per campaign.
 - Per-lead notes and dated reminders (shown in Today).
+- Optional Google Places (New) Text Search lead source (`GOOGLE_PLACES_API_KEY`), up to 60 results, official API only.

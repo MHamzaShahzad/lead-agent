@@ -94,6 +94,12 @@ description, daily limit, seconds between messages, follow-up days, per-weekday 
 Only in `.env`: `DASHBOARD_PASSWORD`, `WAHA_API_KEY`, `WEBHOOK_TOKEN`, `DEFAULT_COUNTRY_CODE`, `WAHA_IMAGE`,
 `OLLAMA_URL`, `WAHA_URL`, `NTFY_TOPIC`. Every option is described in [.env.example](.env.example).
 
+**Google Places (optional lead source).** OpenStreetMap is thin in many countries. Set `GOOGLE_PLACES_API_KEY` in `.env`
+(create a key and enable "Places API (New)" in the [Google Cloud console](https://developers.google.com/maps/documentation/places/web-service/get-api-key))
+and the Find form gets a source choice. It uses the official Text Search API (no scraping), up to 60 results per search.
+Google bills per request, but its free monthly credit covers typical small use; check
+[current pricing](https://developers.google.com/maps/billing-and-pricing/pricing) and set a quota cap in the console.
+
 Using it from your phone: [docs/REMOTE_ACCESS.md](docs/REMOTE_ACCESS.md) (Tailscale; never expose port 8000 to the internet).
 
 ## WhatsApp limits, ToS and ban risk
