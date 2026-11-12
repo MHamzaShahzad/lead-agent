@@ -123,6 +123,26 @@ Send on the ones you like.
 **Every day after:** make sure Ollama and Docker are running, then `./run.sh`. After changing `.env` by hand,
 restart the dashboard (Ctrl+C, then `./run.sh`).
 
+## Run with Docker (everything in containers)
+
+Alternative to `setup.py` + `./run.sh`: only Docker is needed.
+
+```bash
+cp .env.example .env     # set the three passwords; Apple Silicon: WAHA_IMAGE=devlikeapro/waha:gows-arm
+docker compose -f docker-compose.full.yml up -d --build
+```
+Open http://localhost:8000. The dashboard, WAHA and your data (named volumes `data`, `waha_sessions`) all live in Docker.
+
+- **Ollama on your computer (default):** install it, `ollama pull llama3.2:3b`, and add
+  `DOCKER_OLLAMA_URL=http://host.docker.internal:11434` to `.env` (on Linux, Ollama must listen on all interfaces: `OLLAMA_HOST=0.0.0.0`).
+- **Ollama in Docker (CPU only, slower on Mac):** add `--profile ollama` to the command above, then once:
+  `docker compose -f docker-compose.full.yml --profile ollama run --rm ollama-pull`.
+- Other ports: `DASHBOARD_PORT`, `WAHA_PORT`; `DASHBOARD_BIND=0.0.0.0` to expose on your network (set a dashboard password first).
+- Backups of the database are in the `data` volume (`/data/backups`): `docker compose -f docker-compose.full.yml cp dashboard:/data/backups ./backups-copy`.
+- Apple Silicon: use the `gows-arm` image; Docker runs through Colima/Docker Desktop, so allow it ~4 GB RAM.
+
+The plain `docker-compose.yml` (WAHA only) is what `setup.py` uses with `./run.sh`; do not run both at once on the same ports.
+
 ## Sending queue
 
 Pressing Send (or Send selected) only *queues* a message. One background worker sends queued messages one at a time,
