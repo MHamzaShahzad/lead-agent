@@ -109,8 +109,9 @@ def init():
         c.executescript(SCHEMA)
         c.execute("CREATE TABLE IF NOT EXISTS phone_alias (key TEXT PRIMARY KEY, lead_id INTEGER)")
         c.execute("CREATE TABLE IF NOT EXISTS kv (key TEXT PRIMARY KEY, value TEXT)")
-        _add_columns(c, "messages", {"tag": "TEXT", "next_step": "TEXT", "scheduled_at": "TEXT"})
-        _add_columns(c, "leads", {"campaign": "TEXT", "external_id": "TEXT", "updated_at": "TEXT"})
+        _add_columns(c, "messages", {"tag": "TEXT", "next_step": "TEXT", "scheduled_at": "TEXT",
+                                      "channel": "TEXT DEFAULT 'whatsapp'", "subject": "TEXT", "msgid": "TEXT"})
+        _add_columns(c, "leads", {"campaign": "TEXT", "external_id": "TEXT", "updated_at": "TEXT", "channel": "TEXT"})
         c.execute("CREATE INDEX IF NOT EXISTS ix_external ON leads(external_id)")
         c.execute("UPDATE leads SET updated_at=COALESCE(updated_at, created_at) WHERE updated_at IS NULL")
 
@@ -241,13 +242,57 @@ def list_leads():
             "SELECT * FROM leads ORDER BY COALESCE(score,-1) DESC, id DESC")]
 
 
-def add_message(lead_id, direction, body, kind, status):
+def add_message(lead_id, direction, body, kind, status, channel="whatsapp", subject=None, msgid=None):
     with conn() as c:
         cur = c.execute(
-            "INSERT INTO messages (lead_id, direction, body, kind, status, sent_at) VALUES (?,?,?,?,?,?)",
-            (lead_id, direction, body, kind, status, now() if status == "received" else None))
+            "INSERT INTO messages (lead_id, direction, body, kind, status, sent_at, channel, subject, msgid) VALUES (?,?,?,?,?,?,?,?,?)",
+            (lead_id, direction, body, kind, status, now() if status == "received" else None, channel, subject, msgid))
         c.execute("UPDATE leads SET updated_at=? WHERE id=?", (now(), lead_id))
         return cur.lastrowid
+
+
+def lead_by_email(email):
+    email = (email or "").strip().lower()
+    if not email:
+        return None
+    with conn() as c:
+        r = c.execute("SELECT * FROM leads WHERE lower(trim(email))=? ORDER BY id LIMIT 1", (email,)).fetchone()
+        return dict(r) if r else None
+
+
+def lead_by_msgid(msgids):
+    """The lead an email Message-ID (one of ours, from In-Reply-To/References) belongs to."""
+    ids = [i for i in msgids if i]
+    if not ids:
+        return None
+    with conn() as c:
+        r = c.execute(f"SELECT lead_id FROM messages WHERE msgid IN ({','.join('?' * len(ids))}) LIMIT 1", ids).fetchone()
+    return get_lead(r["lead_id"]) if r else None
+
+
+def has_msgid(msgid):
+    with conn() as c:
+        return bool(msgid) and c.execute("SELECT 1 FROM messages WHERE msgid=?", (msgid,)).fetchone() is not None
+
+
+def channel_usable(lead, channel):
+    from . import emailer
+    if channel == "email":
+        return emailer.enabled() and emailer.valid_address(lead.get("email"))
+    return bool(lead.get("phone"))
+
+
+def pick_channel(lead, kind="outreach"):
+    """Channel for a new message to this lead, or None when neither works. Replies answer on the channel the lead wrote on;
+    otherwise the lead's explicit choice, then the channel of our last message to them, then WhatsApp if there is a phone, else email."""
+    msgs = messages(lead_id=lead["id"])                       # newest first
+    pref = None
+    if kind == "reply":
+        pref = next((m.get("channel") for m in msgs if m["direction"] == "in"), None)
+    pref = pref or lead.get("channel") or next((m.get("channel") for m in msgs if m["direction"] == "out" and m["status"] == "sent"), None)
+    order = [pref] if pref in ("whatsapp", "email") else []
+    order += [c for c in ("whatsapp", "email") if c not in order]
+    return next((c for c in order if channel_usable(lead, c)), None)
 
 
 def get_message(mid):
@@ -263,7 +308,7 @@ def update_message(mid, **fields):
 
 
 def messages(status=None, lead_id=None):
-    q, args = "SELECT m.*, l.name AS lead_name, l.phone FROM messages m JOIN leads l ON l.id=m.lead_id WHERE 1=1", []
+    q, args = "SELECT m.*, l.name AS lead_name, l.phone, l.email FROM messages m JOIN leads l ON l.id=m.lead_id WHERE 1=1", []
     if status:
         q += " AND m.status=?"; args.append(status)
     if lead_id:
@@ -272,11 +317,12 @@ def messages(status=None, lead_id=None):
         return [dict(r) for r in c.execute(q + " ORDER BY m.id DESC", args)]
 
 
-def sent_today(now=None):
-    """Messages sent on the UTC day of `now` (default: today)."""
+def sent_today(now=None, channel="whatsapp"):
+    """Messages sent on the UTC day of `now` (default: today) over one channel (each channel has its own daily limit)."""
     day = (now or datetime.now(timezone.utc)).strftime("%Y-%m-%d")
     with conn() as c:
-        return c.execute("SELECT COUNT(*) FROM messages WHERE status='sent' AND date(sent_at)=?", (day,)).fetchone()[0]
+        return c.execute("SELECT COUNT(*) FROM messages WHERE status='sent' AND date(sent_at)=? AND COALESCE(channel,'whatsapp')=?",
+                         (day, channel)).fetchone()[0]
 
 
 def kv_get(key, default=None):
@@ -296,9 +342,9 @@ def queued():
     return sorted(messages(status="queued"), key=lambda m: m["id"])
 
 
-def last_sent_at():
+def last_sent_at(channel="whatsapp"):
     with conn() as c:
-        r = c.execute("SELECT MAX(sent_at) FROM messages WHERE status='sent'").fetchone()[0]
+        r = c.execute("SELECT MAX(sent_at) FROM messages WHERE status='sent' AND COALESCE(channel,'whatsapp')=?", (channel,)).fetchone()[0]
         return datetime.strptime(r, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc) if r else None
 
 
@@ -444,7 +490,7 @@ def replies_by_lead():
     """One row per lead that wrote to us: latest inbound message + how many they sent."""
     with conn() as c:
         return [dict(r) for r in c.execute(
-            "SELECT m.*, l.name AS lead_name, l.phone, "
+            "SELECT m.*, l.name AS lead_name, l.phone, l.email, "
             "(SELECT COUNT(*) FROM messages WHERE lead_id=m.lead_id AND status='received') AS n "
             "FROM messages m JOIN leads l ON l.id=m.lead_id "
             "WHERE m.status='received' AND m.id=(SELECT MAX(id) FROM messages "

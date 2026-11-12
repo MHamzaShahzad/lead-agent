@@ -5,7 +5,7 @@ import json
 import re as _re
 from html import escape
 
-from . import config, whatsapp
+from . import config, db, emailer, whatsapp
 
 
 def e(v):
@@ -79,6 +79,10 @@ STATUS_LABEL = {"new": "New", "contacted": "Messaged", "replied": "Replied", "wo
 KIND_LABEL = {"outreach": "First message", "reply": "Reply to their message", "followup": "Follow-up"}
 
 PLACEHOLDER = _re.compile(r"\[[^\]]{1,40}\]")
+
+
+def chan_badge(m):
+    return '<span class="tag chan">Email</span>' if (m.get("channel") or "whatsapp") == "email" else '<span class="tag chan wa">WhatsApp</span>'
 
 
 def draft_warning(body):
@@ -214,10 +218,17 @@ def page(*, results=None, working=0, replies_week=0, msg, ai_status, wa_status, 
         tag_box = (f'<p class="sub dmeta">AI read their message as {reply_tag(d.get("their_tag"))} · Suggested next step: '
                    f'{e(d.get("their_step") or "")}</p>' if d["kind"] == "reply" and d.get("their_tag") else "")
         failed = d["status"] == "failed"
+        is_mail = d.get("channel") == "email"
+        other = "whatsapp" if is_mail else "email"
+        switch = (f'<form method="post" action="/messages/{d["id"]}/channel" class="chsw"><input type="hidden" name="channel" value="{other}">'
+                  f'<button class="tool">Switch to {"WhatsApp" if is_mail else "Email"} (writes a new version)</button></form>'
+                  if (d.get("phone") and d.get("email")) else "")
+        subj = (f'<label class="lbl">Subject</label><input name="subject" value="{e(d.get("subject") or "")}" maxlength="200" form="send{d["id"]}">'
+                if is_mail else "")
         optout = d.get("lead_status") == "opted_out"
         warn = "This person asked us to stop. Sending is blocked; discard this draft." if optout else draft_warning(d["body"])
         if not warn and not optout:
-            warn = whatsapp.window_note(d.get("phone"))      # Cloud API: 24-hour window note ('' on WAHA)
+            warn = "" if d.get("channel") == "email" else whatsapp.window_note(d.get("phone"))      # Cloud API: 24-hour window note ('' on WAHA)
         fail_box = f'<div class="warn bad">Not sent: {e(d.get("error") or "unknown error")}</div>' if failed else ""
         pick = (f'<label class="pick" title="Select for Send selected"><input type="checkbox" name="ids" value="{d["id"]}" form="bulksend" '
                 f'aria-label="Select draft for {e(d["lead_name"])}"><span>Select</span></label>'
@@ -230,18 +241,19 @@ def page(*, results=None, working=0, replies_week=0, msg, ai_status, wa_status, 
         cards.append(f"""
         <div class="draft" tabindex="-1" data-id="{d['id']}" data-kind="{e(d['kind'])}" data-failed="{1 if failed else 0}" aria-label="Draft for {e(d['lead_name'])}"><details name="drafts">
           <summary class="dh">{av(d['lead_name'])}<div class="who"><span class="name">{e(d['lead_name'])}</span>
-            <span class="sub">{'Not sent · ' if failed else ''}{e(KIND_LABEL.get(d['kind'], d['kind']))}</span>
+            <span class="sub">{chan_badge(d)} {'Not sent · ' if failed else ''}{e(KIND_LABEL.get(d['kind'], d['kind']))}</span>
             <span class="pv">{e(d['body'])}</span></div>
             <div class="dr">{score_badge(d.get('score'))}{pick}<span class="tog">{ic('chev', 18)}</span></div></summary>
-          <div class="dbody"><p class="sub dmeta">{e(d['phone'])} · <a href="/leads/{d['lead_id']}?from=today">Open lead</a></p>
+          <div class="dbody"><p class="sub dmeta">{e(d.get('email') if is_mail else d['phone'])} · <a href="/leads/{d['lead_id']}?from=today">Open lead</a></p>
+          {switch}
           {tag_box}{ctx}{fail_box}
-          <form method="post" action="/messages/{d['id']}/send">
-            <label class="lbl">Your message <span class="sub">· written by AI, edit freely</span></label>
+          <form method="post" action="/messages/{d['id']}/send" id="send{d['id']}">
+            {subj}<label class="lbl">Your message <span class="sub">· written by AI, edit freely</span></label>
             <textarea class="compose" name="body" rows="5" data-count>{e(d['body'])}</textarea>
             <div class="under"><div class="warn" {'' if warn else 'hidden'}>{e(warn)}</div><span class="cnt sub"><span class="n">{len(d['body'])}</span> characters</span></div>
             {tools}
             <div class="acts">
-              <button class="primary wa" {'disabled' if optout else ''}>{ic('send', 17)} {'Try again' if failed else 'Send on WhatsApp'}</button>
+              <button class="primary wa" {'disabled' if optout else ''}>{ic('send', 17)} {'Try again' if failed else ('Send as email' if is_mail else 'Send on WhatsApp')}</button>
               <button class="ghost" formaction="/messages/{d['id']}/reject">Discard</button>
             </div>
           </form></div>
@@ -341,6 +353,13 @@ def page(*, results=None, working=0, replies_week=0, msg, ai_status, wa_status, 
         <p class="sub">There is no QR code or pairing: this uses your Meta business number. Free text can only go to leads who
         messaged you in the last 24 hours; first contact uses your approved template{f" <code>{e(config.WA_CLOUD_TEMPLATE)}</code>" if config.WA_CLOUD_TEMPLATE else " (<b>not set</b>: add WA_CLOUD_TEMPLATE in .env)"}.
         Webhook URL for Meta: <code>/webhook/cloud</code>.</p></div>"""
+    es = emailer.status()
+    if es["smtp"]:
+        email_card = (f'''<div class="card" id="emailstat"><div class="ph"><h3>Email channel</h3><b>{es["sent_today"]} <span class="sub">of {es["limit"]} today</span></b></div>
+        <p class="sub">Sending from <b>{e(es["from"])}</b>. Replies: {("read from your inbox" + (f", last check {t(es['poll_at'])}" if es["poll_at"] else ", first check soon")) if es["imap"] else "not read (add IMAP settings in <a href='/setup'>Setup</a>)"}.</p>
+        {f'<div class="warn bad">Last inbox check failed: {e(es["poll_error"])}</div>' if es["poll_error"] else ''}</div>''')
+    else:
+        email_card = '<div class="card" id="emailstat"><h3>Email channel</h3><p class="sub">Off. Add your SMTP details in <a href="/setup">Setup</a> to also write to leads by email.</p></div>'
     wa_html = f"""
       <div class="card wastat {'ok' if wa_ok else 'bad'}"><div class="ib">{ic('phone', 22)}</div>
         <div><h3>{'Connected' if wa_ok else 'Not connected'}{' (official Cloud API)' if cloud else ''}</h3>
@@ -348,6 +367,7 @@ def page(*, results=None, working=0, replies_week=0, msg, ai_status, wa_status, 
       <div class="card"><div class="ph"><h3>Sent today</h3><b>{sent_today} <span class="sub">of {limit}</span></b></div>
         <div class="meter big"><i style="width:{pct}%"></i></div>
         <p class="sub">The limit protects your number from being banned. {config.SEND_GAP_MIN}-{config.SEND_GAP_MAX}s between messages. Sending hours: {e(whatsapp.schedule_summary())}.</p></div>
+      {email_card}
       <div class="card"><h3>Backup</h3>
         <p class="sub">{('Last automatic backup: ' + last_backup.strftime('%d %b %Y, %H:%M') + '.') if last_backup else 'No backup yet. The first one is made within 10 minutes of the app running.'}
         A copy of your leads is saved once a day in the <code>backups</code> folder (the last 14 are kept).</p></div>
@@ -505,7 +525,7 @@ def lead_page(lead, *, msg, convo, followups, notes=(), reminders=(), came_from=
           "failed": "Failed", "received": ""}
     bubbles = "".join(f"""
       <div class="bub {'in' if m['direction'] == 'in' else 'out'} {e(m['status'])}">
-        <div>{e(m['body'])}</div><div class="meta">{t(m['sent_at'] or m['created_at'])}{(' · ' + e(ST.get(m['status'], m['status']))) if ST.get(m['status'], m['status']) else ''}{(' · Queued, sends at ' + eta(m['scheduled_at'])) if m['status'] == 'queued' else ''}</div>
+        {f'<div class="meta"><b>{e(m["subject"])}</b></div>' if m.get('subject') else ''}<div>{e(m['body'])}</div><div class="meta">{chan_badge(m)} {t(m['sent_at'] or m['created_at'])}{(' · ' + e(ST.get(m['status'], m['status']))) if ST.get(m['status'], m['status']) else ''}{(' · Queued, sends at ' + eta(m['scheduled_at'])) if m['status'] == 'queued' else ''}</div>
         {f'<form method="post" action="/messages/{m["id"]}/cancel">{nxt}<button class="ghost small">Cancel</button></form>' if m['status'] == 'queued' else ''}
         {f'<div class="meta err">{e(m["error"])}</div>' if m.get('error') else ''}
         {f'<div class="meta">{reply_tag(m.get("tag"))} Next step: {e(m["next_step"])}</div>' if m.get('tag') else ''}
@@ -516,8 +536,9 @@ def lead_page(lead, *, msg, convo, followups, notes=(), reminders=(), came_from=
     pending = waiting is not None
     compose = (f"""<form method="post" action="/messages/{waiting['id']}/send" class="mt">{nxt}
       <label class="lbl">Your reply <span class="sub">· written by AI, edit freely</span></label>
+      {f'<label class="lbl">Subject</label><input name="subject" value="{e(waiting.get("subject") or "")}" maxlength="200">' if waiting.get('channel') == 'email' else ''}
       <textarea name="body" rows="5">{e(waiting['body'])}</textarea>
-      <div class="acts"><button class="primary wa">{ic('send', 17)} Send on WhatsApp</button>
+      <div class="acts"><button class="primary wa">{ic('send', 17)} Send {'as email' if waiting.get('channel') == 'email' else 'on WhatsApp'}</button>
       <button class="ghost" formaction="/messages/{waiting['id']}/reject">Discard</button></div></form>""") if waiting else ""
     fu = "".join(f"<li><span>Follow-up #{f['step']}</span><span class='tag'>{t(f['due_at'])}</span></li>"
                  for f in followups)
@@ -531,7 +552,12 @@ def lead_page(lead, *, msg, convo, followups, notes=(), reminders=(), came_from=
     note_list = ('<ul class="list">' + "".join(
         f"<li><span>{e(n['body'])}</span><span class='tag'>{t(n['created_at'])}</span></li>" for n in notes) + '</ul>'
         ) if notes else '<p class="sub">No notes yet.</p>'
-    can_msg = lead["phone"] and lead["status"] != "opted_out"
+    can_msg = db.pick_channel(lead) and lead["status"] != "opted_out"
+    cur_ch = lead.get("channel") or ""
+    chsel = (f'<form method="post" action="/leads/{i}/channel" class="chsel">{nxt}<label class="sub" for="lch">Channel</label>'
+             f'<select id="lch" name="channel" onchange="this.form.submit()"><option value="">Automatic (WhatsApp if phone, else email)</option>'
+             f'<option value="whatsapp"{" selected" if cur_ch == "whatsapp" else ""}>WhatsApp</option>'
+             f'<option value="email"{" selected" if cur_ch == "email" else ""}>Email</option></select></form>')
     digits = "".join(ch for ch in (lead["phone"] or "") if ch.isdigit())
     site = lead["website"] or ""
     site_url = site if "://" in site else "https://" + site
@@ -548,9 +574,9 @@ def lead_page(lead, *, msg, convo, followups, notes=(), reminders=(), came_from=
 {flash_html(msg)}
 <div class="card lhero">{av(lead['name'], 'av xl')}
   <div class="lhi"><h2>{e(lead['name'])}</h2><p class="sub">{e(meta) + ' · ' if meta else ''}Added {t(lead['created_at'])}</p>
-    <div class="lhb">{score_badge(lead['score'])}{stage_select(lead, nxt)}</div></div>
+    <div class="lhb">{score_badge(lead['score'])}{stage_select(lead, nxt)}</div>{chsel}</div>
   <div class="acts">
-    <form method="post" action="/leads/{i}/draft">{nxt}<button class="primary" {'' if can_msg else 'disabled title="Needs a phone number and a lead who has not opted out"'}>{ic('spark', 17)} Write message</button></form>
+    <form method="post" action="/leads/{i}/draft">{nxt}<button class="primary" {'' if can_msg else 'disabled title="Needs a phone number (or an email with the email channel set up) and a lead who has not opted out"'}>{ic('spark', 17)} Write message</button></form>
     {f'<a class="btn secondary" href="https://wa.me/{digits}" target="_blank" rel="noopener">{ic("phone", 17)} WhatsApp</a>' if digits and lead['status'] != 'opted_out' else ''}
     <form method="post" action="/leads/{i}/rescore">{nxt}<button class="ghost">{ic('refresh', 17)} Re-score</button></form></div>
 </div>
@@ -683,6 +709,8 @@ button:active:not(:disabled),.btn:active{transform:scale(.97)}button:disabled{op
 .ghost{background:none;color:var(--sub)}.ghost:hover:not(:disabled){background:var(--fill);color:var(--fg)}
 .danger{background:var(--bad);color:#fff}.small{padding:7px 12px;font-size:13.5px;border-radius:10px}.block{width:100%;margin-top:18px}
 .iconbtn{width:38px;height:38px;border-radius:11px;background:var(--fill);color:var(--fg);display:grid;place-items:center;flex:none}
+.tag.chan{background:var(--acc-bg,var(--cold-bg));color:var(--acc,var(--cold))}.tag.chan.wa{background:var(--ok-bg);color:var(--ok)}.tag.chan{padding:2px 8px;font-size:11px}
+.chsel{margin-top:8px;display:flex;gap:8px;align-items:center;flex-wrap:wrap}.chsel select{max-width:100%}.chsw{margin:6px 0}
 .badge,.tag{display:inline-flex;align-items:center;gap:6px;font-size:12px;font-weight:650;padding:4px 10px;border-radius:99px;white-space:nowrap}
 .badge:before{content:"";width:6px;height:6px;border-radius:50%;background:currentColor}
 .badge.hot{background:var(--hot-bg,var(--ok-bg));color:var(--ok)}.badge.warm{background:var(--warm-bg);color:var(--warm)}

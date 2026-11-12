@@ -4,7 +4,7 @@ import re
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from . import auth, config, ui, wa_cloud, whatsapp
+from . import auth, config, emailer, ui, wa_cloud, whatsapp
 
 router = APIRouter()
 e = ui.e
@@ -12,7 +12,7 @@ e = ui.e
 # form field -> .env key, for secrets (blank = keep the saved value, so nothing secret is ever echoed into the page)
 SECRET_FIELDS = {"password": "DASHBOARD_PASSWORD", "cloud_token": "WA_CLOUD_TOKEN", "cloud_verify": "WA_CLOUD_VERIFY_TOKEN",
                  "cloud_secret": "WA_CLOUD_APP_SECRET", "places_key": "GOOGLE_PLACES_API_KEY", "api_key": "API_KEY",
-                 "crm_secret": "CRM_WEBHOOK_SECRET"}
+                 "crm_secret": "CRM_WEBHOOK_SECRET", "smtp_password": "SMTP_PASSWORD", "imap_password": "IMAP_PASSWORD"}
 
 
 def _secret_input(name, label, key, gen=False):
@@ -71,11 +71,27 @@ def _page(request, error="", ok=""):
 <div class="row"><div><label class="lbl" for="g1">Gap min (seconds)</label><input id="g1" name="gap_min" type="number" min="0" max="3600" value="{c.SEND_GAP_MIN}"></div>
 <div><label class="lbl" for="g2">Gap max (seconds)</label><input id="g2" name="gap_max" type="number" min="0" max="3600" value="{c.SEND_GAP_MAX}"></div></div>
 <p class="sub">Hours apply to every day; fine-tune per day later in Settings. Start slow: new WhatsApp numbers get banned for bulk sending.</p></div>
+<div class="card"><h3><span>6</span> Email channel (optional)</h3>
+<p class="sub">Lets the agent also write to leads by email. Leave the host empty to keep email off. Use a dedicated mailbox and an app password; start with a low daily limit.</p>
+<div class="row"><div><label class="lbl" for="sh">SMTP host</label><input id="sh" name="smtp_host" value="{e(c.SMTP_HOST)}" placeholder="smtp.example.com"></div>
+<div><label class="lbl" for="sp">Port</label><input id="sp" name="smtp_port" type="number" min="1" max="65535" value="{c.SMTP_PORT}"></div></div>
+<label class="lbl" for="st">Security</label><select id="st" name="smtp_tls">{''.join(f'<option value="{v}"{" selected" if c.SMTP_TLS == v else ""}>{l}</option>' for v, l in (("starttls", "STARTTLS (port 587)"), ("ssl", "SSL/TLS (port 465)"), ("none", "None (local test server only)")))}</select>
+<label class="lbl" for="su">SMTP username</label><input id="su" name="smtp_user" value="{e(c.SMTP_USER)}" autocomplete="off">
+{_secret_input('smtp_password', 'SMTP password', 'SMTP_PASSWORD')}
+<label class="lbl" for="sf">From (e.g. Sam &lt;sam@example.com&gt;)</label><input id="sf" name="smtp_from" value="{e(c.SMTP_FROM)}">
+<label class="lbl" for="ih">IMAP host (to read replies; optional)</label><input id="ih" name="imap_host" value="{e(c.IMAP_HOST)}" placeholder="imap.example.com">
+<label class="lbl" for="iu">IMAP username (blank = same as SMTP)</label><input id="iu" name="imap_user" value="{e(c.IMAP_USER)}" autocomplete="off">
+{_secret_input('imap_password', 'IMAP password (blank = same as SMTP)', 'IMAP_PASSWORD')}
+<label class="lbl" for="el">Emails per day</label><input id="el" name="email_limit" type="number" min="1" max="500" value="{c.EMAIL_DAILY_LIMIT}">
+<button type="button" class="secondary" onclick="testMail()">Test email login</button> <span id="eres" class="sub" role="status"></span>
+<p class="sub">The test only logs in. It never sends or reads any mail. Replies are checked every few minutes; mail is never deleted.</p></div>
 <button class="primary block">Save and finish</button></form></main>
 <script>
 function prov(){{var c=document.getElementById('prov').value=='cloud';document.getElementById('p-cloud').hidden=!c;document.getElementById('p-waha').hidden=c}}prov();
 function gen(id){{var a=new Uint8Array(24);crypto.getRandomValues(a);var v=Array.from(a,function(b){{return b.toString(16).padStart(2,'0')}}).join('');
 var i=document.getElementById(id);i.type='text';i.value=v}}
+function testMail(){{var f=new FormData(document.querySelector('form')),r=document.getElementById('eres');r.textContent='Testing…';
+fetch('/setup/test-email',{{method:'POST',body:f}}).then(function(x){{return x.json()}}).then(function(j){{r.textContent=(j.ok?'✓ ':'✗ ')+j.text}}).catch(function(){{r.textContent='✗ Test failed'}})}}
 function testConn(){{var f=new FormData(document.querySelector('form')),r=document.getElementById('tres');r.textContent='Testing…';
 fetch('/setup/test',{{method:'POST',body:f}}).then(function(x){{return x.json()}}).then(function(j){{r.textContent=(j.ok?'✓ ':'✗ ')+j.text}}).catch(function(){{r.textContent='✗ Test failed'}})}}
 </script></body></html>"""
@@ -99,6 +115,31 @@ def setup_test(provider: str = Form("waha"), cloud_token: str = Form(""), cloud_
         return JSONResponse({"ok": ok, "text": text})
     st = whatsapp.status()
     return JSONResponse({"ok": st == "WORKING", "text": f"WAHA session status: {st}" + ("" if st == "WORKING" else " (pair your phone in the WhatsApp tab)")})
+
+
+@router.post("/setup/test-email")
+async def setup_test_email(request: Request):
+    """Read-only: logs in to SMTP (and IMAP) with the form values (blank secrets = saved ones). Sends and reads nothing."""
+    f = await request.form()
+    g = lambda k, d="": str(f.get(k, "")).strip() or d
+    saved = {k: getattr(config, k) for k in ("SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD", "SMTP_FROM", "SMTP_TLS", "IMAP_HOST", "IMAP_USER", "IMAP_PASSWORD")}
+    try:
+        port = int(g("smtp_port", str(config.SMTP_PORT)))
+    except ValueError:
+        return JSONResponse({"ok": False, "text": "Port must be a number."})
+    try:
+        config.SMTP_HOST, config.SMTP_PORT, config.SMTP_USER = g("smtp_host"), port, g("smtp_user")
+        config.SMTP_PASSWORD, config.SMTP_FROM = g("smtp_password", saved["SMTP_PASSWORD"]), g("smtp_from", g("smtp_user"))
+        config.SMTP_TLS, config.IMAP_HOST, config.IMAP_USER = g("smtp_tls", "starttls"), g("imap_host"), g("imap_user")
+        config.IMAP_PASSWORD = g("imap_password", saved["IMAP_PASSWORD"])
+        ok, text = emailer.check_smtp()
+        if ok and config.IMAP_HOST:
+            ok2, t2 = emailer.check_imap()
+            ok, text = ok and ok2, text + " " + t2
+    finally:
+        for k, v in saved.items():
+            setattr(config, k, v)
+    return JSONResponse({"ok": ok, "text": text})
 
 
 @router.post("/setup")
@@ -130,6 +171,17 @@ async def setup_save(request: Request):
               "CRM_WEBHOOK_URL": g("crm_webhook_url"), "DAILY_SEND_LIMIT": limit, "MIN_SECONDS_BETWEEN_SENDS": lo, "SEND_GAP_MIN": lo,
               "SEND_GAP_MAX": hi, "SEND_START": g("send_start"), "SEND_END": g("send_end"),
               "SEND_SCHEDULE": whatsapp.format_schedule([(g("send_start"), g("send_end"))] * 7), "SETUP_DONE": "1"}
+    try:
+        smtp_port, elimit = int(g("smtp_port") or 587), int(g("email_limit") or 30)
+    except ValueError:
+        return _page(request, "Not saved: the email port and daily email limit must be whole numbers.")
+    tls = g("smtp_tls") or "starttls"
+    if not err and (tls not in ("starttls", "ssl", "none") or not 1 <= smtp_port <= 65535 or not 1 <= elimit <= 500):
+        err = "email: port 1-65535, security one of the list, daily limit 1-500."
+    elif not err and g("smtp_host") and not emailer.valid_address(emailer.parseaddr(g("smtp_from") or g("smtp_user"))[1]):
+        err = "email needs a From address like sam@example.com."
+    values.update({"SMTP_HOST": g("smtp_host"), "SMTP_PORT": smtp_port, "SMTP_USER": g("smtp_user"), "SMTP_FROM": g("smtp_from"), "SMTP_TLS": tls,
+                   "IMAP_HOST": g("imap_host"), "IMAP_USER": g("imap_user"), "EMAIL_DAILY_LIMIT": elimit})
     for field, key in SECRET_FIELDS.items():
         v = str(f.get(field, "")).strip()
         if v:

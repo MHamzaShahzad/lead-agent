@@ -129,6 +129,37 @@ def draft_followup(lead, step):
         return f"[fallback] Hi {lead['name']}, just following up on my last message. Is this something worth a 10-minute chat? No worries if not."
 
 
+def draft_email(lead, kind="outreach", history=None, step=1):
+    """An email draft: returns (subject, plain-text body). kind: outreach, reply or followup."""
+    task = {"outreach": "a first-contact cold email TO a prospect business. Introduce us in one line, "
+                        + _FIT_RULES + "say in one line how it helps them, and end with one clear question.",
+            "reply": "a reply to the customer's latest email. Answer exactly what they asked in two or three sentences, "
+                     "NEVER state prices, timelines or guarantees (say we will share details on a quick call), then suggest a quick call.",
+            "followup": f"polite follow-up #{step} to a business that has not replied to our earlier email. Under 50 words, one new useful point, "
+                        "easy to say no. Do not say you came across their message."}[kind]
+    system = (f"You write {task}\nAbout us: {config.MY_BUSINESS}\n" + _FACT_RULES +
+              "Plain text only: no markdown, no HTML, no placeholders like [Name], no signature block, no unsubscribe line (added automatically). "
+              "Max 110 words. Simple English. Friendly and specific, no hype. Never write as the prospect.\n"
+              'Reply with JSON only: {"subject": "<under 8 words, no clickbait>", "body": "<the email body>"}')
+    convo = "\n".join(f"{'Customer' if m['direction'] == 'in' else 'Us'}: {m['body']}" for m in (history or [])[-8:])
+    user = f"Prospect details:\n{_describe(lead)}" + (f"\n\nConversation so far:\n{convo}" if convo else "")
+    try:
+        d = json.loads(_chat(system, user, as_json=True))
+        body, subj = _clean(str(d.get("body", ""))), " ".join(str(d.get("subject", "")).split())[:120]
+        if body and subj:
+            return subj, body
+    except (OllamaDown, ValueError, AttributeError):
+        pass
+    n = lead["name"]
+    if kind == "reply":
+        return "Re: your message", "[fallback] Thanks for your email! Could you tell me a bit more about what you need? Happy to set up a quick call."
+    if kind == "followup":
+        return f"Following up, {n}", f"[fallback] Hi {n} team, just following up on my last email. Is this worth a 10-minute chat? No worries if not."
+    return (f"Quick idea for {n}",
+            f"[fallback] Hi {n} team,\n\nI came across your {lead.get('niche') or 'business'}"
+            f"{' in ' + lead['city'] if lead.get('city') else ''}. {config.MY_BUSINESS}\n\nWould you be open to a quick chat this week?")
+
+
 REWRITE_MODES = {
     "shorten": "Make it noticeably shorter (about half the length) but keep the key point and the closing question.",
     "formal": "Make it more formal and professional in tone, still warm and brief.",

@@ -66,6 +66,18 @@ NTFY_TOPIC = os.getenv("NTFY_TOPIC", "").strip()           # empty = no push ale
 API_KEY = os.getenv("API_KEY", "").strip()
 CRM_WEBHOOK_URL = os.getenv("CRM_WEBHOOK_URL", "").strip()
 CRM_WEBHOOK_SECRET = os.getenv("CRM_WEBHOOK_SECRET", "").strip()
+# Optional email channel (docs: README "Email channel"). SMTP_HOST empty = email disabled; IMAP_HOST empty = replies not read.
+SMTP_HOST = os.getenv("SMTP_HOST", "").strip()
+SMTP_PORT = int(os.getenv("SMTP_PORT") or 587)
+SMTP_USER = os.getenv("SMTP_USER", "").strip()
+SMTP_PASSWORD = os.getenv("SMTP_PASSWORD", "").strip()
+SMTP_FROM = os.getenv("SMTP_FROM", "").strip()                 # e.g. "Sam <sam@example.com>"
+SMTP_TLS = os.getenv("SMTP_TLS", "starttls").strip().lower()   # starttls (587), ssl (465) or none
+IMAP_HOST = os.getenv("IMAP_HOST", "").strip()
+IMAP_PORT = int(os.getenv("IMAP_PORT") or 993)
+IMAP_USER = os.getenv("IMAP_USER", "").strip()                 # empty = SMTP_USER
+IMAP_PASSWORD = os.getenv("IMAP_PASSWORD", "").strip()         # empty = SMTP_PASSWORD
+EMAIL_DAILY_LIMIT = int(os.getenv("EMAIL_DAILY_LIMIT") or 30)
 FOLLOWUP_DAYS = [int(x) for x in os.getenv("FOLLOWUP_DAYS", "3,7").split(",") if x.strip()]
 
 
@@ -75,8 +87,10 @@ SETTING_KEYS = ("BRAND_NAME", "BRAND_TAGLINE", "MY_BUSINESS", "OLLAMA_MODEL", "D
                 # first-run setup page (app/setup_page.py)
                 "SETUP_DONE", "DASHBOARD_PASSWORD", "DEFAULT_COUNTRY_CODE", "WHATSAPP_PROVIDER", "WA_CLOUD_TOKEN", "WA_CLOUD_PHONE_NUMBER_ID",
                 "WA_CLOUD_VERIFY_TOKEN", "WA_CLOUD_APP_SECRET", "WA_CLOUD_TEMPLATE", "GOOGLE_PLACES_API_KEY", "API_KEY", "CRM_WEBHOOK_URL",
-                "CRM_WEBHOOK_SECRET")
-SECRET_KEYS = ("DASHBOARD_PASSWORD", "WA_CLOUD_TOKEN", "WA_CLOUD_VERIFY_TOKEN", "WA_CLOUD_APP_SECRET", "GOOGLE_PLACES_API_KEY", "API_KEY", "CRM_WEBHOOK_SECRET")
+                "CRM_WEBHOOK_SECRET",
+                "SMTP_HOST", "SMTP_PORT", "SMTP_USER", "SMTP_PASSWORD", "SMTP_FROM", "SMTP_TLS", "IMAP_HOST", "IMAP_PORT", "IMAP_USER",
+                "IMAP_PASSWORD", "EMAIL_DAILY_LIMIT")
+SECRET_KEYS = ("SMTP_PASSWORD", "IMAP_PASSWORD", "DASHBOARD_PASSWORD", "WA_CLOUD_TOKEN", "WA_CLOUD_VERIFY_TOKEN", "WA_CLOUD_APP_SECRET", "GOOGLE_PLACES_API_KEY", "API_KEY", "CRM_WEBHOOK_SECRET")
 SETUP_DONE = os.getenv("SETUP_DONE", "") == "1"
 
 
@@ -112,6 +126,7 @@ def save_settings(values):
     for k, v in values.items():
         os.environ[k] = v
         g[k] = ([int(x) for x in v.split(",") if x.strip()] if k == "FOLLOWUP_DAYS"
-                else int(v) if k in ("DAILY_SEND_LIMIT", "MIN_SECONDS_BETWEEN_SENDS", "SEND_GAP_MIN", "SEND_GAP_MAX")
+                else int(v) if k in ("DAILY_SEND_LIMIT", "MIN_SECONDS_BETWEEN_SENDS", "SEND_GAP_MIN", "SEND_GAP_MAX",
+                                       "SMTP_PORT", "IMAP_PORT", "EMAIL_DAILY_LIMIT")
                 else (v == "1") if k in ("OPTOUT_ENABLED", "SETUP_DONE") else v.lstrip("+") if k == "DEFAULT_COUNTRY_CODE"
-                else v.lower() if k == "WHATSAPP_PROVIDER" else v)
+                else v.lower() if k in ("WHATSAPP_PROVIDER", "SMTP_TLS") else v)

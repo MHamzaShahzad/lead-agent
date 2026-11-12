@@ -6,7 +6,7 @@ import threading
 import time
 from datetime import datetime, timedelta, timezone
 
-from . import config, db, webhooks, whatsapp
+from . import config, db, emailer, webhooks, whatsapp
 
 LOCK = threading.Lock()          # one tick at a time
 
@@ -24,6 +24,18 @@ def _offset(now):
 def to_local(t, now=None):
     now = now or clock()
     return t.replace(tzinfo=None) + _offset(now)
+
+
+def channel_of(m):
+    return m.get("channel") or "whatsapp"
+
+
+def limit_for(channel):
+    return config.EMAIL_DAILY_LIMIT if channel == "email" else config.DAILY_SEND_LIMIT
+
+
+def _gap_key(channel):
+    return "gap_next_email" if channel == "email" else "gap_next"
 
 
 def pick_gap():
@@ -47,21 +59,22 @@ def parse(s):
     return datetime.strptime(s, "%Y-%m-%d %H:%M:%S").replace(tzinfo=timezone.utc) if s else None
 
 
-def estimate(n, now=None):
-    """UTC times when the next n queued messages should go out (hours, daily limit and average gap considered)."""
+def estimate(n, now=None, channel="whatsapp"):
+    """UTC times when the next n queued messages of one channel should go out (hours, daily limit and average gap considered)."""
     now = now or clock()
     off = _offset(now)
     gap = timedelta(seconds=(config.SEND_GAP_MIN + config.SEND_GAP_MAX) / 2)
-    t, last = now, db.last_sent_at()
+    lim = limit_for(channel)
+    t, last = now, db.last_sent_at(channel)
     if last:
-        t = max(t, last + timedelta(seconds=int(db.kv_get("gap_next", 0) or 0)))
-    day, count = t.strftime("%Y-%m-%d"), db.sent_today(t)
+        t = max(t, last + timedelta(seconds=int(db.kv_get(_gap_key(channel), 0) or 0)))
+    day, count = t.strftime("%Y-%m-%d"), db.sent_today(t, channel)
     out = []
     for _ in range(n):
         for _ in range(20):
             if t.strftime("%Y-%m-%d") != day:
-                day, count = t.strftime("%Y-%m-%d"), db.sent_today(t)
-            if count >= config.DAILY_SEND_LIMIT:
+                day, count = t.strftime("%Y-%m-%d"), db.sent_today(t, channel)
+            if count >= lim:
                 t = datetime.strptime(day, "%Y-%m-%d").replace(tzinfo=timezone.utc) + timedelta(days=1)
                 continue
             loc = t.replace(tzinfo=None) + off
@@ -79,11 +92,14 @@ def estimate(n, now=None):
 
 
 def reschedule(now=None):
-    for m, t in zip(db.queued(), estimate(len(db.queued()), now)):
-        db.update_message(m["id"], scheduled_at=_fmt(t))
+    q = db.queued()
+    for ch in ("whatsapp", "email"):
+        mine = [m for m in q if channel_of(m) == ch]
+        for m, t in zip(mine, estimate(len(mine), now, ch)):
+            db.update_message(m["id"], scheduled_at=_fmt(t))
 
 
-def enqueue(mid, body):
+def enqueue(mid, body, subject=None):
     """Put a draft (or failed message) in the queue. Raises SendBlocked when it can't be queued."""
     m = db.get_message(mid)
     if not m or m["status"] not in ("draft", "failed"):
@@ -94,6 +110,15 @@ def enqueue(mid, body):
         raise whatsapp.SendBlocked("Message is empty.")
     if lead["status"] == "opted_out":
         raise whatsapp.SendBlocked("Lead opted out (said STOP).")
+    if channel_of(m) == "email":
+        subject = " ".join((subject if subject is not None else m.get("subject") or "").split())
+        if not emailer.enabled():
+            raise whatsapp.SendBlocked("Email is not set up. Add the SMTP settings in Setup.")
+        if not emailer.valid_address(lead.get("email")):
+            raise whatsapp.SendBlocked("This lead has no valid email address.")
+        if not subject:
+            raise whatsapp.SendBlocked("Add a subject line.")
+        db.update_message(mid, subject=subject)
     db.update_message(mid, body=body, status="queued", error=None, scheduled_at=_fmt(clock()))
     reschedule()
     return parse(db.get_message(mid)["scheduled_at"])
@@ -110,6 +135,9 @@ def cancel(mid):
 
 def _with_optout(lead, m, body):
     """Add the opt-out line to the very first message we send a lead (never to replies or follow-ups)."""
+    if channel_of(m) == "email":          # always on first emails (unsubscribe is a legal must in many countries)
+        first = not any(x["direction"] == "out" and x["status"] == "sent" and channel_of(x) == "email" for x in db.messages(lead_id=lead["id"]))
+        return f"{body}\n\n{emailer.UNSUB_LINE}" if m["kind"] == "outreach" and first and emailer.UNSUB_LINE not in body else body
     line = config.OPTOUT_LINE.strip()
     if (config.OPTOUT_ENABLED and line and m["kind"] == "outreach" and line.lower() not in body.lower()
             and not any(x["direction"] == "out" and x["status"] == "sent" for x in db.messages(lead_id=lead["id"]))):
@@ -125,21 +153,33 @@ def _skip_reason(m, lead):
     return None
 
 
+def _thread_refs(lead, m):
+    """In-Reply-To / References for an email that continues a conversation (latest message with an id before this one)."""
+    prev = [x for x in reversed(db.messages(lead_id=lead["id"])) if x.get("msgid") and x["id"] < m["id"]]
+    return (prev[-1]["msgid"], " ".join(x["msgid"] for x in prev[-5:])) if prev else (None, None)
+
+
 def deliver(m, lead):
     mid = m["id"]
+    ch = channel_of(m)
     body = _with_optout(lead, m, m["body"])
     db.update_message(mid, body=body, status="sending")
     try:
-        if config.SEND_TYPING:
-            whatsapp.typing(lead["phone"], True)
-            time.sleep(min(5.0, 1.0 + len(body) / 60))
-        whatsapp.send_text(lead["phone"], body)
+        if ch == "email":
+            irt, refs = _thread_refs(lead, m)
+            db.update_message(mid, msgid=emailer.send(lead["email"], m["subject"] or "Hello", body, irt, refs))
+        else:
+            if config.SEND_TYPING:
+                whatsapp.typing(lead["phone"], True)
+                time.sleep(min(5.0, 1.0 + len(body) / 60))
+            whatsapp.send_text(lead["phone"], body)
     except Exception as e:
         db.update_message(mid, status="failed", error=str(e)[:300], scheduled_at=None)
         return False
     db.update_message(mid, status="sent", sent_at=_fmt(clock()), error=None, scheduled_at=None)
     webhooks.emit("message.sent", {"lead": db.get_lead(lead["id"]),
-                                   "message": {"id": mid, "body": body, "kind": m["kind"]}})
+                                   "message": {"id": mid, "body": body, "kind": m["kind"], "channel": ch,
+                                               **({"subject": m["subject"]} if ch == "email" else {})}})
     if lead["status"] == "new":
         db.update_lead(lead["id"], status="contacted")
     if m["kind"] in ("outreach", "reply"):
@@ -154,25 +194,31 @@ def tick(now=None):
             return "paused"
         now = now or clock()
         m = lead = None
+        waiting = False
         for cand in db.queued():
-            lead = db.get_lead(cand["lead_id"])
-            why = _skip_reason(cand, lead)
+            cl = db.get_lead(cand["lead_id"])
+            why = _skip_reason(cand, cl)
             if why:
                 db.update_message(cand["id"], status="cancelled", error=why, scheduled_at=None)
                 continue
-            m = cand
+            ch = channel_of(cand)
+            last = db.last_sent_at(ch)
+            if (whatsapp.hours_problem(whatsapp._local_now()) or db.sent_today(now, ch) >= limit_for(ch)
+                    or (ch == "email" and not emailer.enabled())):
+                waiting = True
+                continue
+            if last and (now - last).total_seconds() < int(db.kv_get(_gap_key(ch), 0) or 0):
+                waiting = True
+                continue
+            m, lead = cand, cl          # a blocked channel never holds up the other one
             break
         if not m:
-            return "idle"
-        if whatsapp.hours_problem(whatsapp._local_now()) or db.sent_today(now) >= config.DAILY_SEND_LIMIT:
-            reschedule(now)
-            return "waiting"
-        last = db.last_sent_at()
-        if last and (now - last).total_seconds() < int(db.kv_get("gap_next", 0) or 0):
-            return "waiting"
+            if waiting:
+                reschedule(now)
+            return "waiting" if waiting else "idle"
         ok = deliver(m, lead)
         if ok:
-            db.kv_set("gap_next", pick_gap())
+            db.kv_set(_gap_key(channel_of(m)), pick_gap())
         reschedule(now)
         return "sent" if ok else "failed"
 

@@ -16,9 +16,14 @@ from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse,
 
 from urllib.parse import quote
 
-from . import ai, api, auth, config, db, finder, notify, sendqueue, setup_page, ui, wa_cloud, webhooks, whatsapp
+from . import ai, api, auth, config, db, emailer, finder, notify, sendqueue, setup_page, ui, wa_cloud, webhooks, whatsapp
 
 STOP_WORDS = re.compile(r"^\s*(stop|unsubscribe|band karo|mat bhejo|no thanks)\s*[.!]*\s*$", re.I)
+EMAIL_STOP = re.compile(r"\b(unsubscribe|remove me|stop (emailing|sending|contacting)|do not (email|contact))\b", re.I)
+
+
+def _is_stop(text, channel):
+    return bool(STOP_WORDS.match(text) or (channel == "email" and len(text) < 300 and EMAIL_STOP.search(text)))
 
 
 async def _followup_loop():
@@ -40,6 +45,13 @@ async def _queue_loop():
         await asyncio.sleep(2 if r == "sent" else 5)
 
 
+async def _email_loop():
+    while True:
+        if emailer.imap_enabled():
+            await asyncio.to_thread(emailer.run_poll, handle_email_reply)
+        await asyncio.sleep(180)
+
+
 @asynccontextmanager
 async def lifespan(app):
     db.init()
@@ -47,6 +59,7 @@ async def lifespan(app):
     tasks = [asyncio.create_task(_followup_loop())]
     if config.QUEUE_WORKER:
         tasks.append(asyncio.create_task(_queue_loop()))
+        tasks.append(asyncio.create_task(_email_loop()))
     yield
     for t in tasks:
         t.cancel()
@@ -104,12 +117,41 @@ def back(msg="", to="/"):
 
 
 # ---------------- agent actions ----------------
+def _write(lead, kind, history, step, channel):
+    """(subject, body) for a draft on the given channel. Subject is None for WhatsApp."""
+    if channel == "email":
+        return ai.draft_email(lead, kind, history, step)
+    if kind == "reply":
+        return None, ai.draft_reply(lead, history)
+    if kind == "followup":
+        return None, ai.draft_followup(lead, step)
+    return None, ai.draft_outreach(lead)
+
+
+def _thread_subject(lead_id, fallback):
+    """'Re: <first subject>' so replies and follow-ups stay in the same email thread."""
+    mails = [m for m in reversed(db.messages(lead_id=lead_id)) if m.get("subject") and m.get("channel") == "email"]
+    first = next((m["subject"] for m in mails if m["status"] in ("sent", "received")), None) or next((m["subject"] for m in mails), None)
+    return ("Re: " + re.sub(r"^(re:\s*)+", "", first, flags=re.I)) if first else fallback
+
+
+def make_draft(lead, kind, history=None, step=1, channel=None):
+    """Write and store a draft on the lead's channel. Returns the message id, or None when no channel works."""
+    channel = channel or db.pick_channel(lead, kind)
+    if not channel:
+        return None
+    subject, body = _write(lead, kind, history, step, channel)
+    if channel == "email" and kind != "outreach":
+        subject = _thread_subject(lead["id"], subject)
+    return db.add_message(lead["id"], "out", body, kind, "draft", channel, subject)
+
+
 def score_and_draft(lead_id):
     lead = db.get_lead(lead_id)
     score, reason = ai.score_lead(lead)
     db.update_lead(lead_id, score=score, score_reason=reason)
-    if lead.get("phone") and not db.messages(lead_id=lead_id):
-        db.add_message(lead_id, "out", ai.draft_outreach(lead), "outreach", "draft")
+    if (lead.get("phone") or lead.get("email")) and not db.messages(lead_id=lead_id):
+        make_draft(lead, "outreach")
 
 
 api.score_hook = score_and_draft
@@ -131,9 +173,14 @@ INBOUND_LOCK = threading.Lock()   # one sender at a time: no duplicate leads for
 DRAFT_LOCK = threading.Lock()     # one reply draft at a time, so bursts of messages give ONE draft
 
 
-def handle_inbound(phone, text):
+def handle_email_reply(lead, text, subject, msgid):
+    handle_inbound(None, text, lead=lead, channel="email", subject=subject, msgid=msgid)
+
+
+def handle_inbound(phone, text, lead=None, channel="whatsapp", subject=None, msgid=None):
+    stop = _is_stop(text, channel)
     with INBOUND_LOCK:
-        lead = db.lead_by_phone(phone)
+        lead = lead or db.lead_by_phone(phone)
         if not lead:
             info = ai.extract_inbound(text)
             lead_id, _ = db.add_lead({**info, "phone": phone, "source": "whatsapp",
@@ -142,12 +189,11 @@ def handle_inbound(phone, text):
             lead = db.get_lead(lead_id)
             score, reason = ai.score_lead({**lead, "notes": f"They messaged us first: {text}"})
             db.update_lead(lead_id, score=score, score_reason=reason)
-        mid = db.add_message(lead["id"], "in", text, "inbound", "received")
+        mid = db.add_message(lead["id"], "in", text, "inbound", "received", channel, subject, msgid)
         db.cancel_followups(lead["id"])
-        if STOP_WORDS.match(text):
+        if stop:
             db.update_lead(lead["id"], status="opted_out")
     notify.reply_alert(lead["name"])
-    stop = STOP_WORDS.match(text)
     tag, step = (("not_interested", ai.REPLY_TAGS["not_interested"][1]) if stop else ai.classify_reply(text))
     db.update_message(mid, tag=tag, next_step=step)
     webhooks.emit("reply.received", {"lead": db.get_lead(lead["id"]),
@@ -166,16 +212,18 @@ def handle_inbound(phone, text):
         for old in msgs:
             if old["status"] == "draft" and old["kind"] in ("reply", "followup"):
                 db.update_message(old["id"], status="rejected", error="superseded by a newer message from the lead")
-        db.add_message(lead["id"], "out", ai.draft_reply(lead, history), "reply", "draft")
+        make_draft(lead, "reply", history, channel=channel)
 
 
 def run_followups():
     made = 0
     for f in db.due_followups():
         lead = db.get_lead(f["lead_id"])
-        db.add_message(lead["id"], "out", ai.draft_followup(lead, f["step"]), "followup", "draft")
-        db.set_followup(f["id"], "drafted")
-        made += 1
+        if make_draft(lead, "followup", step=f["step"]):
+            db.set_followup(f["id"], "drafted")
+            made += 1
+        else:
+            db.set_followup(f["id"], "cancelled")
     return made
 
 
@@ -252,9 +300,10 @@ def new_draft(lead_id: int, next: str = Form("/")):
         if any(m["status"] == "draft" for m in db.messages(lead_id=lead_id)):
             return back("A draft is already waiting below. Edit it and send.", next)
         hist = [m for m in db.conversation(lead_id) if m["status"] in ("sent", "received")]
-        db.add_message(lead_id, "out", ai.draft_reply(lead, hist), "reply", "draft")
+        make_draft(lead, "reply", hist)
         return back("Reply draft written. Read it below before sending.", next)
-    db.add_message(lead_id, "out", ai.draft_outreach(db.get_lead(lead_id)), "outreach", "draft")
+    if not make_draft(lead, "outreach"):
+        return back("Not created: this lead needs a phone number, or an email address with the email channel set up.", next)
     return back("New draft created. Review it in Approvals.", next)
 
 
@@ -272,9 +321,9 @@ def _eta_text(t):
 
 
 @app.post("/messages/{mid}/send")
-def approve_send(mid: int, body: str = Form(...), next: str = Form("/")):
+def approve_send(mid: int, body: str = Form(...), subject: str = Form(None), next: str = Form("/")):
     try:
-        t = sendqueue.enqueue(mid, body)
+        t = sendqueue.enqueue(mid, body, subject)
     except whatsapp.SendBlocked as e:
         return back(f"Not queued: {e}", next)
     t = parse_eta(mid) or t
@@ -303,14 +352,18 @@ def queue_resume():
     return back("Queue resumed.")
 
 
-def _redraft(m, lead):
+def _redraft(m, lead, channel=None):
+    """(subject, body) for a fresh version of draft m (optionally on another channel)."""
+    ch = channel or m.get("channel") or "whatsapp"
+    hist, n = None, 1
     if m["kind"] == "reply":
         hist = [h for h in db.conversation(lead["id"]) if h["status"] in ("sent", "received") and h["id"] < m["id"]]
-        return ai.draft_reply(lead, hist)
-    if m["kind"] == "followup":
-        n = sum(1 for h in db.conversation(lead["id"]) if h["kind"] == "followup" and h["id"] <= m["id"])
-        return ai.draft_followup(lead, max(1, n))
-    return ai.draft_outreach(lead)
+    elif m["kind"] == "followup":
+        n = max(1, sum(1 for h in db.conversation(lead["id"]) if h["kind"] == "followup" and h["id"] <= m["id"]))
+    subject, body = _write(lead, m["kind"], hist, n, ch)
+    if ch == "email" and m["kind"] != "outreach":
+        subject = _thread_subject(lead["id"], subject)
+    return subject, body
 
 
 @app.post("/messages/{mid}/regenerate")
@@ -318,8 +371,31 @@ def regenerate(mid: int):
     m = db.get_message(mid)
     if not m or m["status"] != "draft":
         return back("That draft is no longer waiting.")
-    db.update_message(mid, body=_redraft(m, db.get_lead(m["lead_id"])))
+    subject, body = _redraft(m, db.get_lead(m["lead_id"]))
+    db.update_message(mid, body=body, **({"subject": subject} if m.get("channel") == "email" else {}))
     return back("New version written. Read it before sending.")
+
+
+@app.post("/messages/{mid}/channel")
+def switch_channel(mid: int, channel: str = Form(...), next: str = Form("/")):
+    m = db.get_message(mid)
+    if not m or m["status"] not in ("draft", "failed") or channel not in ("whatsapp", "email"):
+        return back("That draft is no longer waiting.", next)
+    lead = db.get_lead(m["lead_id"])
+    if not db.channel_usable(lead, channel):
+        return back("Can't switch: " + ("the lead has no phone number." if channel == "whatsapp"
+                                         else "the lead has no email address, or the email channel is not set up."), next)
+    subject, body = _redraft(m, lead, channel)
+    db.update_message(mid, channel=channel, subject=subject, body=body, status="draft", error=None)
+    return back(f"Switched to {channel}. A new version was written; read it before sending.", next)
+
+
+@app.post("/leads/{lead_id}/channel")
+def set_lead_channel(lead_id: int, channel: str = Form(""), next: str = Form("/")):
+    if not db.get_lead(lead_id) or channel not in ("", "whatsapp", "email"):
+        return back("Lead not found.", next)
+    db.update_lead(lead_id, channel=channel or None)
+    return back("Channel saved." if channel else "Channel back to automatic.", next)
 
 
 @app.post("/messages/{mid}/rewrite")
@@ -432,9 +508,9 @@ def _has_replied(lead_id):
 def bulk_draft(ids):
     for i in ids:
         lead = db.get_lead(i)
-        if (lead and not _has_replied(i) and lead.get("phone") and lead["status"] != "opted_out"
+        if (lead and not _has_replied(i) and lead["status"] != "opted_out"
                 and not any(m["status"] == "draft" for m in db.messages(lead_id=i))):
-            db.add_message(i, "out", ai.draft_outreach(lead), "outreach", "draft")
+            make_draft(lead, "outreach")
 
 
 @app.post("/leads/bulk")

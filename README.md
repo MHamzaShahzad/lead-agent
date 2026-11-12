@@ -37,6 +37,8 @@ Connects to your CRM through a REST API and webhooks.
   [official WhatsApp Cloud API](#official-whatsapp-cloud-api) (Meta business number, approved templates).
 - **[CRM integration](#crm-integration)**: REST API (`/api/v1`, API key) and signed outgoing webhooks for HubSpot,
   Zoho, Pipedrive, Salesforce, Odoo, n8n, Zapier or Make. Details: [docs/INTEGRATIONS.md](docs/INTEGRATIONS.md).
+- **[Email channel](#email-channel)** (optional): leads that have an email but no WhatsApp get email drafts (subject + plain text),
+  sent through the same queue with their own daily limit; replies are read over IMAP and handled like WhatsApp replies.
 - Lead page with chat, notes and reminders, campaign tags, "find email/phone on website", CSV export, reply-rate stats.
 - Daily backup of `leads.db` to `backups/` (last 14). Optional phone push on replies via [ntfy](https://ntfy.sh).
 
@@ -155,13 +157,32 @@ Each gap is random between `SEND_GAP_MIN` and `SEND_GAP_MAX` seconds (unset = th
 lists the queue and Settings has Pause/Resume. A message is skipped if the lead opts out or replies while it waits; failed sends keep
 their error and "Try again".
 
+## Email channel
+
+Off until you set `SMTP_HOST` and `SMTP_FROM` (on `/setup` step 6 or in `.env`; see [.env.example](.env.example)). Then:
+
+- **Per lead**: WhatsApp if the lead has a phone, otherwise email. Change it on the lead page (Channel), or press "Switch to Email/WhatsApp" on a draft.
+  Replies are answered on the channel the lead wrote on; follow-ups use the channel of your last message.
+- **Drafts**: the AI writes a subject and a plain-text body from your business description. You edit both and approve, as for WhatsApp.
+- **Sending**: the same queue, sending hours, gaps and approval. Emails have their own `EMAIL_DAILY_LIMIT` (default 30), separate from
+  `DAILY_SEND_LIMIT`. Use a dedicated mailbox and an app password, and start low: cold email can hurt your domain's reputation.
+  Check SPF/DKIM/DMARC for your sending domain and the cold-email law where you and your leads live (CAN-SPAM, GDPR/PECR, CASL).
+- **Unsubscribe**: the first email to a lead ends with an unsubscribe line, and every email carries a `List-Unsubscribe` (mailto) header.
+  "unsubscribe", "remove me" and similar replies mark the lead opted out and cancel follow-ups, same as STOP.
+- **Replies** (optional `IMAP_HOST`, IMAP over SSL; `IMAP_USER`/`IMAP_PASSWORD` default to the SMTP ones): checked every 3 minutes, only when
+  configured. A reply is matched by `In-Reply-To`/`References` or by the sender's address; mail from unknown senders, bounces and
+  auto-replies is ignored. It gets the same AI tag, follow-up cancel, push alert and CRM `reply.received` webhook (with `channel: email`).
+  Handled mail is only flagged read; nothing is ever deleted. The first check just remembers where the mailbox ends, so old mail is not imported.
+- **Status**: the WhatsApp tab shows an Email card (sent today, last inbox check, errors). "Test email login" on `/setup` only logs in.
+- Webhook `message.sent` also carries `channel` (and `subject` for email).
+
 ## Configuration
 
 Most settings are in the dashboard's **Settings** tab and are saved to `.env`: app name and tagline, business
 description, daily limit, seconds between messages (min/max), follow-up days, per-weekday sending hours, opt-out line, AI model.
 Only in `.env`: `DASHBOARD_PASSWORD`, `WAHA_API_KEY`, `WEBHOOK_TOKEN`, `DEFAULT_COUNTRY_CODE`, `WAHA_IMAGE`,
 `OLLAMA_URL`, `WAHA_URL`, `NTFY_TOPIC`, `GOOGLE_PLACES_API_KEY`, `API_KEY`, `CRM_WEBHOOK_URL`, `CRM_WEBHOOK_SECRET`,
-`WHATSAPP_PROVIDER` and the `WA_CLOUD_*` keys, `SEND_TYPING`. Every option is described in [.env.example](.env.example).
+`WHATSAPP_PROVIDER` and the `WA_CLOUD_*` keys, `SEND_TYPING`, and the email keys `SMTP_*`, `IMAP_*`, `EMAIL_DAILY_LIMIT`. Every option is described in [.env.example](.env.example).
 
 ## CRM integration
 
