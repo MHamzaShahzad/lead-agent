@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlparse
 
-from . import config
+from . import config, webhooks
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS leads (
@@ -109,7 +109,9 @@ def init():
         c.executescript(SCHEMA)
         c.execute("CREATE TABLE IF NOT EXISTS phone_alias (key TEXT PRIMARY KEY, lead_id INTEGER)")
         _add_columns(c, "messages", {"tag": "TEXT", "next_step": "TEXT"})
-        _add_columns(c, "leads", {"campaign": "TEXT"})
+        _add_columns(c, "leads", {"campaign": "TEXT", "external_id": "TEXT", "updated_at": "TEXT"})
+        c.execute("CREATE INDEX IF NOT EXISTS ix_external ON leads(external_id)")
+        c.execute("UPDATE leads SET updated_at=COALESCE(updated_at, created_at) WHERE updated_at IS NULL")
 
 
 def _add_columns(c, table, cols):
@@ -145,7 +147,8 @@ def name_key(name, city=""):
 
 
 def find_duplicate(c, lead):
-    for col, key in (("phone_key", phone_key(lead.get("phone"))),
+    for col, key in (("external_id", lead.get("external_id")),
+                     ("phone_key", phone_key(lead.get("phone"))),
                      ("domain_key", domain_key(lead.get("website"))),
                      ("name_key", name_key(lead.get("name"), lead.get("city")))):
         if key:
@@ -155,11 +158,18 @@ def find_duplicate(c, lead):
     return None
 
 
-FIELDS = ("name", "website", "niche", "phone", "email", "city", "notes", "source")
+FIELDS = ("name", "website", "niche", "phone", "email", "city", "notes", "source", "external_id", "campaign")
 
 
 def add_lead(lead):
     """Insert a lead. Returns (id, is_new). Duplicates fill in missing fields instead."""
+    lead_id, is_new, changed = _add_lead(lead)
+    if is_new or changed:
+        webhooks.emit("lead.created" if is_new else "lead.updated", get_lead(lead_id))
+    return lead_id, is_new
+
+
+def _add_lead(lead):
     lead = {k: (str(lead.get(k) or "").strip() or None) for k in FIELDS}
     if not lead["name"]:
         lead["name"] = lead["website"] or lead["phone"] or "Unknown"
@@ -169,16 +179,16 @@ def add_lead(lead):
             existing = dict(c.execute("SELECT * FROM leads WHERE id=?", (dup,)).fetchone())
             fill = {k: v for k, v in lead.items() if v and not existing.get(k)}
             if fill:
-                c.execute(f"UPDATE leads SET {', '.join(k + '=?' for k in fill)} WHERE id=?",
-                          (*fill.values(), dup))
+                c.execute(f"UPDATE leads SET {', '.join(k + '=?' for k in fill)}, updated_at=? WHERE id=?",
+                          (*fill.values(), now(), dup))
                 _refresh_keys(c, dup)
-            return dup, False
+            return dup, False, bool(fill)
         cur = c.execute(
-            f"INSERT INTO leads ({', '.join(FIELDS)}, phone_key, domain_key, name_key) "
-            f"VALUES ({', '.join('?' * (len(FIELDS) + 3))})",
+            f"INSERT INTO leads ({', '.join(FIELDS)}, phone_key, domain_key, name_key, updated_at) "
+            f"VALUES ({', '.join('?' * (len(FIELDS) + 4))})",
             (*[lead[k] for k in FIELDS], phone_key(lead["phone"]),
-             domain_key(lead["website"]), name_key(lead["name"], lead["city"])))
-        return cur.lastrowid, True
+             domain_key(lead["website"]), name_key(lead["name"], lead["city"]), now()))
+        return cur.lastrowid, True, True
 
 
 def _refresh_keys(c, lead_id):
@@ -205,9 +215,23 @@ def lead_by_phone(phone):
 
 
 def update_lead(lead_id, **fields):
+    old = get_lead(lead_id) if webhooks.enabled() else None
     with conn() as c:
-        c.execute(f"UPDATE leads SET {', '.join(k + '=?' for k in fields)} WHERE id=?",
-                  (*fields.values(), lead_id))
+        c.execute(f"UPDATE leads SET {', '.join(k + '=?' for k in fields)}, updated_at=? WHERE id=?",
+                  (*fields.values(), now(), lead_id))
+    if old is not None:
+        _emit_changes(old, get_lead(lead_id))
+
+
+def _emit_changes(old, new):
+    if not old or not new:
+        return
+    if old["status"] != new["status"]:
+        webhooks.emit("lead.stage_changed", {**new, "previous_status": old["status"]})
+        if new["status"] == "opted_out":
+            webhooks.emit("lead.opted_out", new)
+    if any(old.get(k) != new.get(k) for k in new if k not in ("status", "updated_at")):
+        webhooks.emit("lead.updated", new)
 
 
 def list_leads():
@@ -221,6 +245,7 @@ def add_message(lead_id, direction, body, kind, status):
         cur = c.execute(
             "INSERT INTO messages (lead_id, direction, body, kind, status, sent_at) VALUES (?,?,?,?,?,?)",
             (lead_id, direction, body, kind, status, now() if status == "received" else None))
+        c.execute("UPDATE leads SET updated_at=? WHERE id=?", (now(), lead_id))
         return cur.lastrowid
 
 
@@ -294,7 +319,7 @@ def set_followup(fid, status):
 
 
 # ---------- lead detail helpers ----------
-EDITABLE = ("name", "phone", "website", "niche", "city", "notes", "email", "campaign")
+EDITABLE = ("name", "phone", "website", "niche", "city", "notes", "email", "campaign", "external_id")
 
 
 def edit_lead(lead_id, **fields):
@@ -304,9 +329,13 @@ def edit_lead(lead_id, **fields):
         vals.pop("name")
     if not vals:
         return
+    old = get_lead(lead_id) if webhooks.enabled() else None
     with conn() as c:
-        c.execute(f"UPDATE leads SET {', '.join(k + '=?' for k in vals)} WHERE id=?", (*vals.values(), lead_id))
+        c.execute(f"UPDATE leads SET {', '.join(k + '=?' for k in vals)}, updated_at=? WHERE id=?",
+                  (*vals.values(), now(), lead_id))
         _refresh_keys(c, lead_id)
+    if old is not None:
+        _emit_changes(old, get_lead(lead_id))
 
 
 def fill_empty_contacts(lead_id, email=None, phone=None):
@@ -319,8 +348,10 @@ def fill_empty_contacts(lead_id, email=None, phone=None):
         fill["phone"] = phone
     if fill:
         with conn() as c:
-            c.execute(f"UPDATE leads SET {', '.join(k + '=?' for k in fill)} WHERE id=?", (*fill.values(), lead_id))
+            c.execute(f"UPDATE leads SET {', '.join(k + '=?' for k in fill)}, updated_at=? WHERE id=?",
+                      (*fill.values(), now(), lead_id))
             _refresh_keys(c, lead_id)
+        webhooks.emit("lead.updated", get_lead(lead_id))
     return list(fill)
 
 

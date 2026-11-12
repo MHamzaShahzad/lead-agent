@@ -72,3 +72,4 @@ Do the phases in order; run the tests and check desktop + mobile screenshots aft
 - "Find email/phone on website", campaign tag per lead with reply rate per campaign.
 - Per-lead notes and dated reminders (shown in Today).
 - Optional Google Places (New) Text Search lead source (`GOOGLE_PLACES_API_KEY`), up to 60 results, official API only.
+- CRM integration: REST API under `/api/v1` (Bearer `API_KEY`, upsert on `external_id`), signed outgoing webhooks (`CRM_WEBHOOK_URL`), `external_id`/`updated_at` columns, [docs/INTEGRATIONS.md](INTEGRATIONS.md).
