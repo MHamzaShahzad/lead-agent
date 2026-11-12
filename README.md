@@ -9,6 +9,10 @@ Connects to your CRM through a REST API and webhooks.
 > [WhatsApp limits and ban risk](#whatsapp-limits-tos-and-ban-risk) first, or use the
 > [official WhatsApp Cloud API](#official-whatsapp-cloud-api) instead.
 
+![Demo mode: leads, drafts, and a simulated reply](docs/screenshots/demo.gif)
+
+Try it without WhatsApp or Ollama: `./run.sh --demo` ([demo mode](#demo-mode)).
+
 ![Today screen on desktop](docs/screenshots/today.png)
 
 ![Today with the sending queue, Add leads with Google Places, and a lead on a phone](docs/screenshots/phone.png)
@@ -19,6 +23,21 @@ Connects to your CRM through a REST API and webhooks.
 
 ![Settings with the sending queue](docs/screenshots/settings.png)
 </details>
+
+## Demo mode
+
+See the whole app in a minute, with no WhatsApp, WAHA or Ollama:
+
+```bash
+./run.sh --demo          # or: DEMO_MODE=1 ./run.sh   or: python -m app.demo   (Windows: `.\run.ps1 --demo`)
+```
+
+Opens on http://127.0.0.1:8000 with ~15 sample leads across every stage, drafts waiting, sent messages, AI-tagged replies,
+follow-ups and two campaigns. It has its own database (`demo.db`; it refuses to use `leads.db`), ignores your `.env` settings
+for sending, and replaces WhatsApp and email with fakes that only record what "was sent". Open a lead and press
+**Simulate reply** to pretend they wrote back: the reply goes through the real pipeline (AI tag, reply draft, follow-ups
+cancelled, STOP opts out). If Ollama is running it writes the drafts, otherwise canned drafts are used. A "Demo mode"
+banner is shown on every page. Delete `demo.db` to start over.
 
 ## Features
 
@@ -263,6 +282,8 @@ limits, AI tags, follow-ups and STOP handling work the same, and the WhatsApp ta
 - **Pairing code doesn't work**: codes expire within minutes; press Link again. Make sure the number has the country code.
 
 ## Development and tests
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) and the [CHANGELOG](CHANGELOG.md). `./run.sh --demo` is the quickest way to try UI changes.
 
 ```bash
 .venv/bin/python -m pytest -q                 # no Ollama or WhatsApp needed (fallbacks + fake sender)

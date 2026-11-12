@@ -1,0 +1,35 @@
+name: Bug report
+description: Something doesn't work as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please redact phone numbers, emails, API keys and tokens. Never paste your `.env`.
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What you did, what you expected, what you got.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Does it happen in demo mode (`./run.sh --demo`)? That makes it much easier to fix.
+  - type: dropdown
+    id: channel
+    attributes:
+      label: WhatsApp provider
+      options: [WAHA, Cloud API, Email only, Not related]
+  - type: input
+    id: run
+    attributes:
+      label: How you run it
+      placeholder: "macOS, Docker / run.sh, Python 3.12, Ollama llama3.2:3b, WAHA gows-arm"
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs or error text
+      render: shell
