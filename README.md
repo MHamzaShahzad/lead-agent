@@ -11,7 +11,14 @@ Connects to your CRM through a REST API and webhooks.
 
 ![Today screen on desktop](docs/screenshots/today.png)
 
-![Today, Chats and a lead on a phone](docs/screenshots/phone.png)
+![Today with the sending queue, Add leads with Google Places, and a lead on a phone](docs/screenshots/phone.png)
+
+<details><summary>More screenshots: Leads and Settings</summary>
+
+![Leads list with AI scores](docs/screenshots/leads.png)
+
+![Settings with the sending queue](docs/screenshots/settings.png)
+</details>
 
 ## Features
 
