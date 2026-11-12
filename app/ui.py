@@ -199,6 +199,8 @@ def page(*, results=None, working=0, replies_week=0, msg, ai_status, wa_status, 
         failed = d["status"] == "failed"
         optout = d.get("lead_status") == "opted_out"
         warn = "This person asked us to stop. Sending is blocked; discard this draft." if optout else draft_warning(d["body"])
+        if not warn and not optout:
+            warn = whatsapp.window_note(d.get("phone"))      # Cloud API: 24-hour window note ('' on WAHA)
         fail_box = f'<div class="warn bad">Not sent: {e(d.get("error") or "unknown error")}</div>' if failed else ""
         pick = (f'<label class="pick" title="Select for Send selected"><input type="checkbox" name="ids" value="{d["id"]}" form="bulksend" '
                 f'aria-label="Select draft for {e(d["lead_name"])}"><span>Select</span></label>'
@@ -309,17 +311,8 @@ def page(*, results=None, working=0, replies_week=0, msg, ai_status, wa_status, 
       <form method="post" action="/followups/run" class="mt"><button class="secondary">Write due follow-ups now</button></form>"""
 
     # ---------- WhatsApp ----------
-    wa_html = f"""
-      <div class="card wastat {'ok' if wa_ok else 'bad'}"><div class="ib">{ic('phone', 22)}</div>
-        <div><h3>{'Connected' if wa_ok else 'Not connected'}</h3>
-        <p class="sub">{f'Linked number: +{e(wa_number)}' if wa_number else 'Status: ' + e(wa_status)}</p></div></div>
-      <div class="card"><div class="ph"><h3>Sent today</h3><b>{sent_today} <span class="sub">of {limit}</span></b></div>
-        <div class="meter big"><i style="width:{pct}%"></i></div>
-        <p class="sub">The limit protects your number from being banned. At least {config.MIN_SECONDS_BETWEEN_SENDS}s between messages. Sending hours: {e(whatsapp.schedule_summary())}.</p></div>
-      <div class="card"><h3>Backup</h3>
-        <p class="sub">{('Last automatic backup: ' + last_backup.strftime('%d %b %Y, %H:%M') + '.') if last_backup else 'No backup yet. The first one is made within 10 minutes of the app running.'}
-        A copy of your leads is saved once a day in the <code>backups</code> folder (the last 14 are kept).</p></div>
-      <div class="card"><h3>Link WhatsApp again</h3>
+    cloud = whatsapp.is_cloud()
+    old_html = f"""<div class="card"><h3>Link WhatsApp again</h3>
         <p class="sub">Only needed if WhatsApp logged out. You'll get an 8-character code to enter in
         WhatsApp → Linked devices → Link a device → <i>Link with phone number instead</i>.</p>
         <form method="post" action="/whatsapp/relink" class="inline">
@@ -327,6 +320,21 @@ def page(*, results=None, working=0, replies_week=0, msg, ai_status, wa_status, 
           <button class="primary" {'disabled' if wa_ok else ''}>Get pairing code</button></form>
         {'<p class="sub">Disabled because you are already connected.</p>' if wa_ok else ''}
       </div>"""
+    new_cloud = f"""<div class="card"><h3>Official WhatsApp Cloud API</h3>
+        <p class="sub">There is no QR code or pairing: this uses your Meta business number. Free text can only go to leads who
+        messaged you in the last 24 hours; first contact uses your approved template{f" <code>{e(config.WA_CLOUD_TEMPLATE)}</code>" if config.WA_CLOUD_TEMPLATE else " (<b>not set</b>: add WA_CLOUD_TEMPLATE in .env)"}.
+        Webhook URL for Meta: <code>/webhook/cloud</code>.</p></div>"""
+    wa_html = f"""
+      <div class="card wastat {'ok' if wa_ok else 'bad'}"><div class="ib">{ic('phone', 22)}</div>
+        <div><h3>{'Connected' if wa_ok else 'Not connected'}{' (official Cloud API)' if cloud else ''}</h3>
+        <p class="sub">{f'{"Business number" if cloud else "Linked number"}: +{e(wa_number)}' if wa_number else 'Status: ' + e(wa_status)}</p></div></div>
+      <div class="card"><div class="ph"><h3>Sent today</h3><b>{sent_today} <span class="sub">of {limit}</span></b></div>
+        <div class="meter big"><i style="width:{pct}%"></i></div>
+        <p class="sub">The limit protects your number from being banned. At least {config.MIN_SECONDS_BETWEEN_SENDS}s between messages. Sending hours: {e(whatsapp.schedule_summary())}.</p></div>
+      <div class="card"><h3>Backup</h3>
+        <p class="sub">{('Last automatic backup: ' + last_backup.strftime('%d %b %Y, %H:%M') + '.') if last_backup else 'No backup yet. The first one is made within 10 minutes of the app running.'}
+        A copy of your leads is saved once a day in the <code>backups</code> folder (the last 14 are kept).</p></div>
+{new_cloud if cloud else old_html}"""
 
     # ---------- Settings ----------
     settings_html = f"""

@@ -3,6 +3,8 @@ import asyncio
 import csv
 import hmac
 import io
+import json
+import logging
 import re
 import threading
 import time
@@ -10,11 +12,11 @@ from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
 
 from fastapi import BackgroundTasks, FastAPI, Form, Query, Request, UploadFile
-from fastapi.responses import HTMLResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, PlainTextResponse, RedirectResponse, Response
 
 from urllib.parse import quote
 
-from . import ai, api, auth, config, db, finder, notify, ui, webhooks, whatsapp
+from . import ai, api, auth, config, db, finder, notify, ui, wa_cloud, webhooks, whatsapp
 
 STOP_WORDS = re.compile(r"^\s*(stop|unsubscribe|band karo|mat bhejo|no thanks)\s*[.!]*\s*$", re.I)
 
@@ -49,7 +51,7 @@ async def require_login(request: Request, call_next):
         return await call_next(request)
     if path in ("/docs", "/openapi.json", "/redoc") and api.key_ok(api.bearer(request)):
         return await call_next(request)     # API docs: dashboard login OR the API key
-    if (config.DASHBOARD_PASSWORD and path not in ("/login", "/webhook/waha")
+    if (config.DASHBOARD_PASSWORD and path not in ("/login", "/webhook/waha", "/webhook/cloud")
             and not auth.valid(request.cookies.get(auth.COOKIE))):
         nxt = request.url.path + (("?" + request.url.query) if request.url.query else "")
         return RedirectResponse("/login?next=" + quote(nxt), status_code=303)
@@ -201,6 +203,30 @@ async def waha_webhook(request: Request, tasks: BackgroundTasks, token: str = ""
     parsed = whatsapp.parse_webhook(await request.json())
     if parsed:
         tasks.add_task(handle_inbound, *parsed)
+    return {"ok": True}
+
+
+@app.get("/webhook/cloud")
+def cloud_verify(request: Request):
+    q = request.query_params
+    ch = wa_cloud.verify_challenge(q.get("hub.mode"), q.get("hub.verify_token"), q.get("hub.challenge"))
+    return PlainTextResponse(ch) if ch is not None else Response(status_code=403)
+
+
+@app.post("/webhook/cloud")
+async def cloud_webhook(request: Request, tasks: BackgroundTasks):
+    raw = await request.body()
+    if not wa_cloud.verify_signature(raw, request.headers.get("x-hub-signature-256")):
+        return Response(status_code=403)
+    try:
+        msgs, stats = wa_cloud.parse_webhook(json.loads(raw))
+    except ValueError:
+        return Response(status_code=400)
+    for phone, text in msgs:
+        tasks.add_task(handle_inbound, phone, text)
+    for wamid, st, err in stats:
+        if st == "failed":                       # e.g. number not on WhatsApp, template rejected
+            logging.getLogger("uvicorn.error").warning("WhatsApp delivery failed (%s): %s", wamid, err)
     return {"ok": True}
 
 

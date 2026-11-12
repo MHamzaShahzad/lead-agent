@@ -73,3 +73,4 @@ Do the phases in order; run the tests and check desktop + mobile screenshots aft
 - Per-lead notes and dated reminders (shown in Today).
 - Optional Google Places (New) Text Search lead source (`GOOGLE_PLACES_API_KEY`), up to 60 results, official API only.
 - CRM integration: REST API under `/api/v1` (Bearer `API_KEY`, upsert on `external_id`), signed outgoing webhooks (`CRM_WEBHOOK_URL`), `external_id`/`updated_at` columns, [docs/INTEGRATIONS.md](INTEGRATIONS.md).
+- Optional official WhatsApp Cloud API provider (`WHATSAPP_PROVIDER=cloud`, `app/wa_cloud.py`): send text/template, `/webhook/cloud` (verify handshake, `X-Hub-Signature-256`), 24-hour-window handling with template fallback and UI note, Cloud status in the WhatsApp tab. WAHA remains the default; `whatsapp.send_text(phone, text)` is unchanged.

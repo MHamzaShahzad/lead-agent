@@ -109,6 +109,25 @@ Google bills per request, but its free monthly credit covers typical small use; 
 
 Using it from your phone: [docs/REMOTE_ACCESS.md](docs/REMOTE_ACCESS.md) (Tailscale; never expose port 8000 to the internet).
 
+## Official WhatsApp Cloud API
+
+WAHA links a normal account (ban risk). For a ToS-compliant setup, set `WHATSAPP_PROVIDER=cloud`; the dashboard,
+limits, AI tags, follow-ups and STOP handling work the same, and the WhatsApp tab shows Cloud status instead of pairing.
+
+1. At developers.facebook.com create a Business app, add the **WhatsApp** product and a business phone number.
+2. Create a permanent token (System User) and copy the **Phone number ID** and the app's **App secret**.
+3. In `.env`: `WHATSAPP_PROVIDER=cloud`, `WA_CLOUD_TOKEN`, `WA_CLOUD_PHONE_NUMBER_ID`, `WA_CLOUD_APP_SECRET`,
+   and a `WA_CLOUD_VERIFY_TOKEN` you invent.
+4. In Meta's WhatsApp > Configuration set the webhook to `https://YOUR-PUBLIC-URL/webhook/cloud` with that verify token
+   and subscribe to **messages**. It must be reachable from the internet (see `docs/REMOTE_ACCESS.md`); it skips the
+   dashboard login but rejects any request without a valid `X-Hub-Signature-256`.
+5. **24-hour rule:** free text can only go to leads who wrote to you in the last 24 hours. For first contact create a
+   message template (category *Marketing*, one body variable `{{1}}`, e.g. `Hi! {{1}}`) in WhatsApp Manager, wait for
+   approval (minutes to a day), then set `WA_CLOUD_TEMPLATE` (+ `WA_CLOUD_TEMPLATE_LANG`). The draft text is sent in
+   `{{1}}`. Without a template, drafts to new leads are blocked and the card says why.
+6. **Costs:** Meta charges per delivered template message (marketing templates roughly a few US cents to ~10 cents,
+   varying by country; check Meta's current pricing). Replies inside the 24-hour window are free.
+
 ## WhatsApp limits, ToS and ban risk
 
 - WAHA connects your **normal WhatsApp account** as a linked device. This is **not** the official API and is against

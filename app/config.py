@@ -22,6 +22,14 @@ OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "llama3.2:3b")
 WAHA_URL = os.getenv("WAHA_URL", "http://localhost:3000")
 WAHA_SESSION = os.getenv("WAHA_SESSION", "default")
 WAHA_API_KEY = os.getenv("WAHA_API_KEY", "")
+# WhatsApp provider: "waha" (default, links a normal account, unofficial) or "cloud" (official Meta Cloud API).
+WHATSAPP_PROVIDER = os.getenv("WHATSAPP_PROVIDER", "waha").strip().lower()
+WA_CLOUD_TOKEN = os.getenv("WA_CLOUD_TOKEN", "").strip()
+WA_CLOUD_PHONE_NUMBER_ID = os.getenv("WA_CLOUD_PHONE_NUMBER_ID", "").strip()
+WA_CLOUD_VERIFY_TOKEN = os.getenv("WA_CLOUD_VERIFY_TOKEN", "").strip()
+WA_CLOUD_APP_SECRET = os.getenv("WA_CLOUD_APP_SECRET", "").strip()
+WA_CLOUD_TEMPLATE = os.getenv("WA_CLOUD_TEMPLATE", "").strip()          # approved template, one {{1}} body variable
+WA_CLOUD_TEMPLATE_LANG = os.getenv("WA_CLOUD_TEMPLATE_LANG", "en").strip() or "en"
 # What YOU sell; the AI uses this to score leads and personalise messages.
 MY_BUSINESS = os.getenv(
     "MY_BUSINESS",
