@@ -47,6 +47,10 @@ OPTOUT_LINE = os.getenv("OPTOUT_LINE", "Reply STOP to opt out")
 BACKUP_DIR = os.getenv("BACKUP_DIR", str(ROOT / "backups"))
 BACKUPS_KEEP = 14
 NTFY_TOPIC = os.getenv("NTFY_TOPIC", "").strip()           # empty = no push alerts
+# CRM integration (docs/INTEGRATIONS.md). API_KEY empty = REST API disabled; CRM_WEBHOOK_URL empty = no outgoing webhooks.
+API_KEY = os.getenv("API_KEY", "").strip()
+CRM_WEBHOOK_URL = os.getenv("CRM_WEBHOOK_URL", "").strip()
+CRM_WEBHOOK_SECRET = os.getenv("CRM_WEBHOOK_SECRET", "").strip()
 FOLLOWUP_DAYS = [int(x) for x in os.getenv("FOLLOWUP_DAYS", "3,7").split(",") if x.strip()]
 
 

@@ -14,7 +14,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse, Response
 
 from urllib.parse import quote
 
-from . import ai, auth, config, db, finder, notify, ui, whatsapp
+from . import ai, api, auth, config, db, finder, notify, ui, webhooks, whatsapp
 
 STOP_WORDS = re.compile(r"^\s*(stop|unsubscribe|band karo|mat bhejo|no thanks)\s*[.!]*\s*$", re.I)
 
@@ -38,12 +38,18 @@ async def lifespan(app):
 
 
 app = FastAPI(title="Lead Gen Agent", lifespan=lifespan)
+app.include_router(api.router)
 FLASH = {"msg": ""}
 
 
 @app.middleware("http")
 async def require_login(request: Request, call_next):
-    if (config.DASHBOARD_PASSWORD and request.url.path not in ("/login", "/webhook/waha")
+    path = request.url.path
+    if path.startswith("/api/v1/"):         # the REST API has its own Bearer-key auth (app/api.py)
+        return await call_next(request)
+    if path in ("/docs", "/openapi.json", "/redoc") and api.key_ok(api.bearer(request)):
+        return await call_next(request)     # API docs: dashboard login OR the API key
+    if (config.DASHBOARD_PASSWORD and path not in ("/login", "/webhook/waha")
             and not auth.valid(request.cookies.get(auth.COOKIE))):
         nxt = request.url.path + (("?" + request.url.query) if request.url.query else "")
         return RedirectResponse("/login?next=" + quote(nxt), status_code=303)
@@ -88,6 +94,9 @@ def score_and_draft(lead_id):
         db.add_message(lead_id, "out", ai.draft_outreach(lead), "outreach", "draft")
 
 
+api.score_hook = score_and_draft
+
+
 def import_leads(rows, tasks):
     new = dup = 0
     for row in rows:
@@ -123,6 +132,8 @@ def handle_inbound(phone, text):
     stop = STOP_WORDS.match(text)
     tag, step = (("not_interested", ai.REPLY_TAGS["not_interested"][1]) if stop else ai.classify_reply(text))
     db.update_message(mid, tag=tag, next_step=step)
+    webhooks.emit("reply.received", {"lead": db.get_lead(lead["id"]),
+                                     "message": {"id": mid, "body": text, "tag": tag, "next_step": step}})
     if stop:
         return
     with DRAFT_LOCK:
@@ -174,6 +185,8 @@ def send_message(mid, body):
         db.update_message(mid, status="failed", error=str(e)[:300])
         raise whatsapp.SendBlocked(str(e)) from e
     db.update_message(mid, status="sent", sent_at=db.now(), error=None)
+    webhooks.emit("message.sent", {"lead": db.get_lead(lead["id"]),
+                                   "message": {"id": mid, "body": body, "kind": m["kind"]}})
     if lead["status"] == "new":
         db.update_lead(lead["id"], status="contacted")
     if m["kind"] in ("outreach", "reply"):     # nudge later if they go quiet (any reply cancels it)

@@ -92,7 +92,14 @@ restart the dashboard (Ctrl+C, then `./run.sh`).
 Most settings are in the dashboard's **Settings** tab and are saved to `.env`: app name and tagline, business
 description, daily limit, seconds between messages, follow-up days, per-weekday sending hours, opt-out line, AI model.
 Only in `.env`: `DASHBOARD_PASSWORD`, `WAHA_API_KEY`, `WEBHOOK_TOKEN`, `DEFAULT_COUNTRY_CODE`, `WAHA_IMAGE`,
-`OLLAMA_URL`, `WAHA_URL`, `NTFY_TOPIC`. Every option is described in [.env.example](.env.example).
+`OLLAMA_URL`, `WAHA_URL`, `NTFY_TOPIC`, `API_KEY`, `CRM_WEBHOOK_URL`, `CRM_WEBHOOK_SECRET`. Every option is described in [.env.example](.env.example).
+
+## CRM integration
+
+Plug it into HubSpot, Zoho, Pipedrive, Salesforce, Odoo or anything else with a REST API (`API_KEY`, `/api/v1`) and
+outgoing signed webhooks (`CRM_WEBHOOK_URL`, `CRM_WEBHOOK_SECRET`), directly or via n8n, Zapier or Make. The API
+cannot send WhatsApp messages; drafts still need your approval. Details, event payloads, signature checks and recipes:
+[docs/INTEGRATIONS.md](docs/INTEGRATIONS.md).
 
 Using it from your phone: [docs/REMOTE_ACCESS.md](docs/REMOTE_ACCESS.md) (Tailscale; never expose port 8000 to the internet).
 

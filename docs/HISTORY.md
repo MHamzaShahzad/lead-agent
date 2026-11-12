@@ -71,3 +71,4 @@ Do the phases in order; run the tests and check desktop + mobile screenshots aft
 - Sending hours (default 09:00-20:00) and an opt-out line on first messages.
 - "Find email/phone on website", campaign tag per lead with reply rate per campaign.
 - Per-lead notes and dated reminders (shown in Today).
+- CRM integration: REST API under `/api/v1` (Bearer `API_KEY`, upsert on `external_id`), signed outgoing webhooks (`CRM_WEBHOOK_URL`), `external_id`/`updated_at` columns, [docs/INTEGRATIONS.md](INTEGRATIONS.md).
